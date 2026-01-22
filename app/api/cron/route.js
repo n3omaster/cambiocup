@@ -10,13 +10,13 @@ export async function GET() {
 	const response2 = await fetch('https://api.qvapay.com/p2p/completed_pairs_average?coin=BANK_MLC')
 	const mlcHistory = await response2.json()
 
-	const response3 = await fetch('https:/api.qvapay.com/p2p/completed_pairs_average?coin=CLASICA')
+	const response3 = await fetch('https://api.qvapay.com/p2p/completed_pairs_average?coin=CLASICA')
 	const clasicaHistory = await response3.json()
 
-	const response4 = await fetch('https:/api.qvapay.com/p2p/completed_pairs_average?coin=ETECSA')
+	const response4 = await fetch('https://api.qvapay.com/p2p/completed_pairs_average?coin=ETECSA')
 	const etecsaHistory = await response4.json()
 
-	const response5 = await fetch('https:/api.qvapay.com/p2p/completed_pairs_average?coin=BANDECPREPAGO')
+	const response5 = await fetch('https://api.qvapay.com/p2p/completed_pairs_average?coin=BANDECPREPAGO')
 	const bandecprepagoHistory = await response5.json()
 
 	const { cup, mlc, clasica, etecsa, bandecprepago } = await saveCoinData(
