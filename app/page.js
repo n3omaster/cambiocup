@@ -3,6 +3,7 @@
 import OneSignal from 'react-onesignal'
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
+import NumberFlow from '@number-flow/react'
 import { randomize, averageData } from './utils/helpers'
 
 // Home page
@@ -13,6 +14,7 @@ export default function Home() {
 
 	const [coin, setCoin] = useState('CUP')
 	const [value, setValue] = useState(0)
+	const [decimals, setDecimals] = useState(2)
 	const [bgColor, setBgColor] = useState('bg-crimson')
 	const [showModal, setShowModal] = useState(false)
 	const [copied, setCopied] = useState(false)
@@ -24,28 +26,33 @@ export default function Home() {
 
 		if (coin === 'CUP') {
 			const { first, average } = averageData(data.cupHistory)
-			const number = Number.parseFloat(randomize(first.value, 0.5)).toFixed(2)
+			const number = Number.parseFloat(randomize(first.value, 0.5))
 			setValue(number)
+			setDecimals(2)
 			number < average ? setBgColor('bg-malachite') : setBgColor('bg-crimson')
 		} else if (coin === 'MLC') {
 			const { first, average } = averageData(data.mlcHistory)
-			const number = Number.parseFloat(randomize(first.value, 0.009)).toFixed(3)
+			const number = Number.parseFloat(randomize(first.value, 0.009))
 			setValue(number)
+			setDecimals(3)
 			number < average ? setBgColor('bg-malachite') : setBgColor('bg-crimson')
 		} else if (coin === 'CLASICA') {
 			const { first, average } = averageData(data.clasicaHistory)
-			const number = Number.parseFloat(randomize(first.value, 0.005)).toFixed(3)
+			const number = Number.parseFloat(randomize(first.value, 0.005))
 			setValue(number)
+			setDecimals(3)
 			number < average ? setBgColor('bg-malachite') : setBgColor('bg-crimson')
 		} else if (coin === 'ETECSA') {
 			const { first, average } = averageData(data.etecsaHistory)
-			const number = Number.parseFloat(randomize(first.value, 0.5)).toFixed(2)
+			const number = Number.parseFloat(randomize(first.value, 0.5))
 			setValue(number)
+			setDecimals(2)
 			number < average ? setBgColor('bg-malachite') : setBgColor('bg-crimson')
 		} else if (coin === 'TROPICAL') {
 			const { first, average } = averageData(data.bandecprepagoHistory)
-			const number = Number.parseFloat(randomize(first.value, 0.5)).toFixed(2)
+			const number = Number.parseFloat(randomize(first.value, 0.5))
 			setValue(number)
+			setDecimals(2)
 			number < average ? setBgColor('bg-malachite') : setBgColor('bg-crimson')
 		}
 	}
@@ -117,7 +124,16 @@ export default function Home() {
 							</a>
 						</p>
 					</div>
-					<h2 className="text-6xl sm:text-8xl md:text-8xl lg:text-[10rem] xl:text-[12rem] font-extrabold text-white text-center break-all">${value}</h2>
+					<h2 className="text-6xl sm:text-8xl md:text-8xl lg:text-[10rem] xl:text-[12rem] font-extrabold text-white text-center">
+						<NumberFlow
+							value={value}
+							format={{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }}
+							prefix="$"
+							transformTiming={{ duration: 500, easing: 'ease-out' }}
+							spinTiming={{ duration: 500, easing: 'ease-out' }}
+							opacityTiming={{ duration: 350, easing: 'ease-out' }}
+						/>
+					</h2>
 				</div>
 
 				<div className='flex flex-col sm:flex-row justify-between gap-2 sm:gap-0 text-xs sm:text-sm md:text-base'>
