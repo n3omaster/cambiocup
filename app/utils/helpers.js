@@ -11,7 +11,7 @@ const randomize = (num, deep = 0.1) => {
 // take the rest of the objects and create a average of the object.value
 // return both values
 const averageData = (arr) => {
-	const [first, ...rest] = arr
+	const [first, ...rest] = arr || []
 	if (rest.length === 0) return { first, average: first.value }
 	const average = rest.reduce((acc, curr) => acc + curr.value, 0) / rest.length
 	return { first, average }

@@ -14,9 +14,7 @@ export async function GET() {
 	// Filter offers from last 2 minutes using ISO timestamp comparison
 	const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString()
 
-	const recentOffers = (data || []).filter((offer) => {
-		return offer.created_at >= twoMinutesAgo
-	})
+	const recentOffers = (data || []).filter((offer) => { return offer.created_at >= twoMinutesAgo })
 
 	return NextResponse.json({ offers: recentOffers })
 }
