@@ -70,7 +70,7 @@ npm install
 ```bash
 # Crear archivo .env
 SUPABASE_URL=tu_url_de_supabase
-SUPABASE_ANON_KEY=tu_clave_anonima_de_supabase
+SUPABASE_KEY=tu_clave_anonima_de_supabase
 ```
 
 4. **Ejecutar en desarrollo**

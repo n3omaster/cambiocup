@@ -4,6 +4,7 @@ import OneSignal from 'react-onesignal'
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import NumberFlow from '@number-flow/react'
+import FloatingOffers from './components/FloatingOffers'
 import { randomize, averageData } from './utils/helpers'
 
 // Home page
@@ -88,7 +89,8 @@ export default function Home() {
 
 	return (
 		<>
-			<main className={bgColor + " flex min-h-screen flex-col justify-between p-4 sm:p-8 md:p-12"}>
+			<FloatingOffers />
+			<main className={bgColor + " flex min-h-screen flex-col justify-between p-4 sm:p-8 md:p-12 relative z-20"}>
 				<div className='flex flex-col sm:flex-row justify-between items-center gap-2 sm:gap-0 text-xs sm:text-sm md:text-base'>
 					<h1 className="text-center sm:text-left text-lg sm:text-xl md:text-2xl">Tasas de Cambio en Cuba</h1>
 					{!noCode && (

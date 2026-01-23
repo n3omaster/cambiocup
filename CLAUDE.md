@@ -48,5 +48,5 @@ npm run lint     # ESLint code quality check
 Required in `.env`:
 ```
 SUPABASE_URL=<supabase-project-url>
-SUPABASE_ANON_KEY=<supabase-anon-key>
+SUPABASE_KEY=<supabase-anon-key>
 ```
