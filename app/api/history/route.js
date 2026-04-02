@@ -9,10 +9,7 @@ export async function GET(request) {
 
 	const { data, error } = await getHistoricalData(coin, days)
 
-	if (error) {
-		console.error('Error fetching historical data:', error)
-		return NextResponse.json({ data: [] })
-	}
+	if (error) { console.error('Error fetching historical data:', error); return NextResponse.json({ data: [] }) }
 
 	// Transform data for chart format (timestamp, value)
 	const chartData = (data || []).map((item) => ({

@@ -26,6 +26,5 @@ export async function GET() {
 		(etecsaHistory.average_buy + etecsaHistory.average_sell) / 2,
 		(bandecprepagoHistory.average_buy + bandecprepagoHistory.average_sell) / 2)
 
-	const randomNumber = Math.random() * 1000
 	return NextResponse.json({ cup, mlc, clasica, etecsa, bandecprepago, randomNumber })
 }
