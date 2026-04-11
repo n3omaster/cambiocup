@@ -18,6 +18,8 @@ export async function GET() {
     })
     const mlcHistory = await response2.json()
 
+    console.log(mlcHistory)
+
     const response3 = await fetch('https://api.qvapay.com/p2p/completed_pairs_average?coin=CLASICA', {
         headers: { 'Cache-Control': 'no-cache' },
         next: { revalidate: 0 }
