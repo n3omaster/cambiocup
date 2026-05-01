@@ -12,12 +12,12 @@ CambioCUP is a real-time Cuban currency exchange rate tracker displaying live ra
 npm run dev      # Development server (Turbopack is default in Next.js 16)
 npm run build    # Production build
 npm run start    # Start production server
-npm run lint     # ESLint flat config (v9) with nextVitals
+npm run lint     # ESLint flat config (v9) with nextVitals — pinned to v9 because eslint-config-next@16.2 ships APIs incompatible with v10
 ```
 
 ## Architecture
 
-**Tech Stack**: Next.js 16.1 (App Router), React 19.2, Tailwind CSS 4.1 (via `@tailwindcss/postcss`), Supabase JS v2, NumberFlow (animated numbers), OneSignal (push notifications)
+**Tech Stack**: Next.js 16.2 (App Router), React 19.2, Tailwind CSS 4.2 (via `@tailwindcss/postcss`), Supabase JS v2, NumberFlow (animated numbers), OneSignal (push notifications)
 
 **Data Flow**:
 1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (5 coins) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table

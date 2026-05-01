@@ -1,92 +1,91 @@
 'use client'
 
 import OneSignal from 'react-onesignal'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import NumberFlow from '@number-flow/react'
 import FloatingOffers from './components/FloatingOffers'
 import BackgroundChart from './components/BackgroundChart'
 import { randomize, averageData } from './utils/helpers'
 
-// Home page
-export default function Home() {
+const COIN_CONFIG = {
+	CUP: { historyKey: 'cupHistory', decimals: 2, deep: 0.5 },
+	MLC: { historyKey: 'mlcHistory', decimals: 3, deep: 0.009 },
+	CLASICA: { historyKey: 'clasicaHistory', decimals: 3, deep: 0.005 },
+	ETECSA: { historyKey: 'etecsaHistory', decimals: 2, deep: 0.5 },
+	TROPICAL: { historyKey: 'bandecprepagoHistory', decimals: 2, deep: 0.5 },
+}
 
+const COINS = Object.keys(COIN_CONFIG)
+
+export default function Home() {
 	const searchParams = useSearchParams()
 	const noCode = searchParams.get('nocode') === 'true'
 
 	const [coin, setCoin] = useState('CUP')
 	const [value, setValue] = useState(0)
-	const [decimals, setDecimals] = useState(2)
 	const [bgColor, setBgColor] = useState('bg-crimson')
 	const [showModal, setShowModal] = useState(false)
 	const [copied, setCopied] = useState(false)
 
-	const getData = async () => {
+	const decimals = COIN_CONFIG[coin].decimals
 
-		const response = await fetch('/api')
-		const data = await response.json()
-
-		if (coin === 'CUP') {
-			const { first, average } = averageData(data.cupHistory)
-			const number = Number.parseFloat(randomize(first.value, 0.5))
-			setValue(number)
-			setDecimals(2)
-			number < average ? setBgColor('bg-malachite') : setBgColor('bg-crimson')
-		} else if (coin === 'MLC') {
-			const { first, average } = averageData(data.mlcHistory)
-			const number = Number.parseFloat(randomize(first.value, 0.009))
-			setValue(number)
-			setDecimals(3)
-			number < average ? setBgColor('bg-malachite') : setBgColor('bg-crimson')
-		} else if (coin === 'CLASICA') {
-			const { first, average } = averageData(data.clasicaHistory)
-			const number = Number.parseFloat(randomize(first.value, 0.005))
-			setValue(number)
-			setDecimals(3)
-			number < average ? setBgColor('bg-malachite') : setBgColor('bg-crimson')
-		} else if (coin === 'ETECSA') {
-			const { first, average } = averageData(data.etecsaHistory)
-			const number = Number.parseFloat(randomize(first.value, 0.5))
-			setValue(number)
-			setDecimals(2)
-			number < average ? setBgColor('bg-malachite') : setBgColor('bg-crimson')
-		} else if (coin === 'TROPICAL') {
-			const { first, average } = averageData(data.bandecprepagoHistory)
-			const number = Number.parseFloat(randomize(first.value, 0.5))
-			setValue(number)
-			setDecimals(2)
-			number < average ? setBgColor('bg-malachite') : setBgColor('bg-crimson')
-		}
-	}
-
-	console.log(coin, value)
-
-	// fetch the value of CUP from DB and populate the value and the color based on the trending from the last 24 hours, cache this value for 5 mins
 	useEffect(() => {
-		getData()
-		OneSignal.init({ appId: '04dffeef-fbcd-4c21-95fc-eb358400eff2' });
-		const interval = setInterval(() => {
-			getData()
-		}, 4000)
-		return () => { clearInterval(interval) }
+		OneSignal.init({ appId: '04dffeef-fbcd-4c21-95fc-eb358400eff2' })
+	}, [])
+
+	useEffect(() => {
+		const config = COIN_CONFIG[coin]
+
+		const tick = async () => {
+			try {
+				const response = await fetch('/api')
+				const data = await response.json()
+
+				const history = data[config.historyKey]
+				if (!history?.length) return
+
+				const { first, average } = averageData(history)
+				const number = Number.parseFloat(randomize(first.value, config.deep))
+
+				setValue(number)
+				setBgColor(number < average ? 'bg-malachite' : 'bg-crimson')
+			} catch (err) {
+				console.error('Error fetching rates:', err)
+			}
+		}
+
+		tick()
+		const interval = setInterval(tick, 4000)
+		return () => clearInterval(interval)
 	}, [coin])
 
-	// Cerrar modal con tecla Escape
 	useEffect(() => {
-		const handleEscape = (e) => { if (e.key === 'Escape' && showModal) { setShowModal(false) } }
+		if (!showModal) return
+		const handleEscape = (e) => { if (e.key === 'Escape') setShowModal(false) }
 		window.addEventListener('keydown', handleEscape)
 		return () => window.removeEventListener('keydown', handleEscape)
 	}, [showModal])
 
-	const iframeCode = `<iframe src="${typeof window !== 'undefined' ? window.location.origin : 'https://www.cambiocup.com'}" width="100%" height="600" frameborder="0" allowfullscreen style="border-radius: 5px;"></iframe>`
+	const iframeCode = useMemo(
+		() => `<iframe src="${typeof window !== 'undefined' ? window.location.origin : 'https://www.cambiocup.com'}" width="100%" height="600" frameborder="0" allowfullscreen style="border-radius: 5px;"></iframe>`,
+		[]
+	)
 
-	const copyToClipboard = async () => {
+	const copyToClipboard = useCallback(async () => {
 		try {
 			await navigator.clipboard.writeText(iframeCode)
 			setCopied(true)
 			setTimeout(() => setCopied(false), 2000)
-		} catch (err) { console.error('Error al copiar:', err) }
-	}
+		} catch (err) {
+			console.error('Error al copiar:', err)
+		}
+	}, [iframeCode])
+
+	const numberFormat = useMemo(
+		() => ({ minimumFractionDigits: decimals, maximumFractionDigits: decimals }),
+		[decimals]
+	)
 
 	return (
 		<>
@@ -111,27 +110,22 @@ export default function Home() {
 				<div className="flex-1 flex flex-col items-center justify-center px-2 sm:px-4">
 					<div className="flex justify-center items-center flex-wrap gap-2 sm:gap-3 md:gap-4 mb-4 sm:mb-6">
 						<p className='text-2xl sm:text-4xl md:text-5xl lg:text-6xl xl:text-7xl text-white font-black flex flex-wrap justify-center items-center gap-2 sm:gap-3 md:gap-4'>
-							<a href="javascript:void(0)" onClick={() => setCoin("CUP")} className={`${coin === "CUP" ? "" : "opacity-70 blur-xs"} text-white transition-all hover:opacity-80 whitespace-nowrap`}>
-								CUP
-							</a>
-							<a href="javascript:void(0)" onClick={() => setCoin("MLC")} className={`${coin === "MLC" ? "" : "opacity-70 blur-xs"} text-white transition-all hover:opacity-80 whitespace-nowrap`}>
-								MLC
-							</a>
-							<a href="javascript:void(0)" onClick={() => setCoin("CLASICA")} className={`${coin === "CLASICA" ? "" : "opacity-70 blur-xs"} text-white transition-all hover:opacity-80 whitespace-nowrap`}>
-								CLASICA
-							</a>
-							<a href="javascript:void(0)" onClick={() => setCoin("ETECSA")} className={`${coin === "ETECSA" ? "" : "opacity-70 blur-xs"} text-white transition-all hover:opacity-80 whitespace-nowrap`}>
-								ETECSA
-							</a>
-							<a href="javascript:void(0)" onClick={() => setCoin("TROPICAL")} className={`${coin === "TROPICAL" ? "" : "opacity-70 blur-xs"} text-white transition-all hover:opacity-80 whitespace-nowrap`}>
-								TROPICAL
-							</a>
+							{COINS.map((name) => (
+								<button
+									key={name}
+									type="button"
+									onClick={() => setCoin(name)}
+									className={`${coin === name ? "" : "opacity-70 blur-xs"} text-white transition-all hover:opacity-80 whitespace-nowrap bg-transparent`}
+								>
+									{name}
+								</button>
+							))}
 						</p>
 					</div>
 					<h2 className="text-6xl sm:text-8xl md:text-8xl lg:text-[10rem] xl:text-[12rem] font-extrabold text-white text-center">
 						<NumberFlow
 							value={value}
-							format={{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }}
+							format={numberFormat}
 							prefix="$"
 							transformTiming={{ duration: 500, easing: 'ease-out' }}
 							spinTiming={{ duration: 500, easing: 'ease-out' }}
@@ -145,12 +139,12 @@ export default function Home() {
 					<div className='flex items-center gap-4'>
 						<a href='https://x.com/qvapay' target='_blank' rel='noopener noreferrer' className='hover:opacity-80 transition-opacity' aria-label='X (Twitter)'>
 							<svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-								<path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+								<path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
 							</svg>
 						</a>
 						<a href='https://github.com/n3omaster/cambiocup' target='_blank' rel='noopener noreferrer' className='hover:opacity-80 transition-opacity' aria-label='GitHub'>
 							<svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-								<path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+								<path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
 							</svg>
 						</a>
 					</div>

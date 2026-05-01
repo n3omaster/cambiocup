@@ -1,7 +1,7 @@
-import nextVitals from "eslint-config-next/core-web-vitals";
+import nextVitals from 'eslint-config-next/core-web-vitals'
 
 const eslintConfig = [
-  ...nextVitals,
-];
+	...nextVitals,
+]
 
-export default eslintConfig;
+export default eslintConfig
