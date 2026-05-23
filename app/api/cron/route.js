@@ -13,11 +13,7 @@ const fetchAverage = async (coin) => {
 export async function GET() {
 	try {
 		const [cupAvg, mlcAvg, clasicaAvg, etecsaAvg, bandecprepagoAvg] = await Promise.all(QVAPAY_COINS.map(fetchAverage))
-
 		const result = await saveCoinData(cupAvg, mlcAvg, clasicaAvg, etecsaAvg, bandecprepagoAvg)
 		return NextResponse.json(result)
-	} catch (error) {
-		console.error('Cron error:', error)
-		return NextResponse.json({ error: 'Failed to refresh exchange rates' }, { status: 502 })
-	}
+	} catch (error) { console.error('Cron error:', error); return NextResponse.json({ error: 'Failed to refresh exchange rates' }, { status: 502 }) }
 }

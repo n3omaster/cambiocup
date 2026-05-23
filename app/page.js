@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import NumberFlow from '@number-flow/react'
 import FloatingOffers from './components/FloatingOffers'
-import BackgroundChart from './components/BackgroundChart'
+import BackgroundLiveLine from './components/BackgroundLiveLine'
 import { randomize, averageData } from './utils/helpers'
 
 const COIN_CONFIG = {
@@ -19,6 +19,7 @@ const COIN_CONFIG = {
 const COINS = Object.keys(COIN_CONFIG)
 
 export default function Home() {
+
 	const searchParams = useSearchParams()
 	const noCode = searchParams.get('nocode') === 'true'
 
@@ -35,10 +36,12 @@ export default function Home() {
 	}, [])
 
 	useEffect(() => {
+
 		const config = COIN_CONFIG[coin]
 
 		const tick = async () => {
 			try {
+
 				const response = await fetch('/api')
 				const data = await response.json()
 
@@ -50,9 +53,8 @@ export default function Home() {
 
 				setValue(number)
 				setBgColor(number < average ? 'bg-malachite' : 'bg-crimson')
-			} catch (err) {
-				console.error('Error fetching rates:', err)
-			}
+
+			} catch (err) { console.error('Error fetching rates:', err) }
 		}
 
 		tick()
@@ -67,31 +69,23 @@ export default function Home() {
 		return () => window.removeEventListener('keydown', handleEscape)
 	}, [showModal])
 
-	const iframeCode = useMemo(
-		() => `<iframe src="${typeof window !== 'undefined' ? window.location.origin : 'https://www.cambiocup.com'}" width="100%" height="600" frameborder="0" allowfullscreen style="border-radius: 5px;"></iframe>`,
-		[]
-	)
+	const iframeCode = useMemo(() => `<iframe src="${typeof window !== 'undefined' ? window.location.origin : 'https://www.cambiocup.com'}" width="100%" height="600" frameborder="0" allowfullscreen style="border-radius: 5px;"></iframe>`, [])
 
 	const copyToClipboard = useCallback(async () => {
 		try {
 			await navigator.clipboard.writeText(iframeCode)
 			setCopied(true)
 			setTimeout(() => setCopied(false), 2000)
-		} catch (err) {
-			console.error('Error al copiar:', err)
-		}
+		} catch (err) { console.error('Error al copiar:', err) }
 	}, [iframeCode])
 
-	const numberFormat = useMemo(
-		() => ({ minimumFractionDigits: decimals, maximumFractionDigits: decimals }),
-		[decimals]
-	)
+	const numberFormat = useMemo(() => ({ minimumFractionDigits: decimals, maximumFractionDigits: decimals }), [decimals])
 
 	return (
 		<>
 			<FloatingOffers />
 			<main className={bgColor + " flex min-h-screen flex-col justify-between p-4 sm:p-8 md:p-12 relative z-20"}>
-				<BackgroundChart coin={coin} opacity={0.25} />
+				<BackgroundLiveLine coin={coin} value={value} opacity={0.18} />
 				<div className='flex flex-col sm:flex-row justify-between items-center gap-2 sm:gap-0 text-xs sm:text-sm md:text-base'>
 					<h1 className="text-center sm:text-left text-lg sm:text-xl md:text-2xl">Tasas de Cambio en Cuba</h1>
 					{!noCode && (
