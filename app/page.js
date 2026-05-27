@@ -151,7 +151,7 @@ export default function Home() {
 				<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
 					<div className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto relative z-10 opacity-100" style={{ backgroundColor: '#ffffff' }} onClick={(e) => e.stopPropagation()} >
 						<div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-20" style={{ backgroundColor: '#ffffff' }}>
-							<h3 className="text-xl font-bold" style={{ color: '#111827' }}>Código HTML para iframe</h3>
+							<h3 className="text-xl font-bold" style={{ color: '#111827' }}>Insertar la tasa en tu sitio web</h3>
 							<button onClick={() => setShowModal(false)} className="hover:opacity-70 transition-colors" style={{ color: '#6b7280' }} aria-label="Cerrar modal">
 								<svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 									<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -163,24 +163,18 @@ export default function Home() {
 								Copia y pega este código HTML en tu página web para insertar este widget:
 							</p>
 							<div className="relative">
-								<pre className="border border-gray-200 p-4 rounded-lg overflow-x-auto text-sm" style={{ backgroundColor: '#f9fafb', color: '#111827' }}>
+								<pre className="border border-gray-200 p-4 rounded-lg whitespace-pre-wrap break-all text-sm" style={{ backgroundColor: '#f9fafb', color: '#111827' }}>
 									<code style={{ color: '#111827' }}>{iframeCode}</code>
 								</pre>
-								<button onClick={copyToClipboard} className="absolute top-2 right-2 hover:opacity-90 px-4 py-2 rounded text-sm font-medium transition-colors flex items-center gap-2" style={{ backgroundColor: '#111827', color: '#ffffff' }}>
+								<button onClick={copyToClipboard} className="absolute top-2 right-2 p-2 rounded-md transition-all flex items-center justify-center bg-yale_blue/65 hover:bg-yale_blue backdrop-blur-sm shadow-sm" style={{ color: '#ffffff' }} aria-label={copied ? '¡Copiado!' : 'Copiar'} title={copied ? '¡Copiado!' : 'Copiar'}>
 									{copied ? (
-										<>
-											<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-												<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-											</svg>
-											¡Copiado!
-										</>
+										<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+											<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+										</svg>
 									) : (
-										<>
-											<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-												<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-											</svg>
-											Copiar
-										</>
+										<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+											<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+										</svg>
 									)}
 								</button>
 							</div>
