@@ -29,6 +29,12 @@ export default function BackgroundLiveLine({ coin = 'CUP', value = 0, opacity = 
 	const lastValue = data[data.length - 1]?.value ?? 0
 	const liveValue = value > 0 ? value : lastValue
 
+	// Size the visible window to the actual span of the data so the line always fills
+	// the full screen width, even when the DB holds fewer than DAYS of history. As more
+	// history accumulates the span grows on its own (capped by the DAYS query above).
+	const dataSpan = data.length > 1 ? data[data.length - 1].time - data[0].time : 0
+	const windowSecs = dataSpan > 0 ? Math.max(dataSpan, 3600) : WINDOW_SECS
+
 	return (
 		<div
 			style={{
@@ -44,7 +50,7 @@ export default function BackgroundLiveLine({ coin = 'CUP', value = 0, opacity = 
 				value={liveValue}
 				color="#ffffff"
 				theme="dark"
-				window={WINDOW_SECS}
+				window={windowSecs}
 				lineWidth={1.5}
 				grid={false}
 				badge={false}

@@ -154,15 +154,14 @@ function HomeContent() {
 
 			{/* Modal */}
 			{showModal && (
-				<div
-					className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-					role="button"
-					tabIndex={0}
-					aria-label="Cerrar modal"
-					onClick={() => setShowModal(false)}
-					onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setShowModal(false) }}
-				>
-					<div className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto relative z-10 opacity-100" style={{ backgroundColor: '#ffffff' }} onClick={(e) => e.stopPropagation()} >
+				<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+						<button
+							type="button"
+							aria-label="Cerrar modal"
+							className="absolute inset-0 size-full cursor-default"
+							onClick={() => setShowModal(false)}
+						/>
+					<div className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto relative z-10 opacity-100" style={{ backgroundColor: '#ffffff' }}>
 						<div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-20" style={{ backgroundColor: '#ffffff' }}>
 							<h3 className="text-xl font-bold" style={{ color: '#111827' }}>Insertar la tasa en tu sitio web</h3>
 							<button type="button" onClick={() => setShowModal(false)} className="hover:opacity-70 transition-colors" style={{ color: '#6b7280' }} aria-label="Cerrar modal">
