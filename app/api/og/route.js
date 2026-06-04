@@ -20,6 +20,17 @@ const COLORS = {
 	red: '#d7263d',
 }
 
+// Shared container layout for the OG card (Satori requires inline styles)
+const CARD_BASE = {
+	display: 'flex',
+	height: '100%',
+	width: '100%',
+	alignItems: 'center',
+	justifyContent: 'center',
+	flexDirection: 'column',
+	fontFamily: 'sans-serif',
+}
+
 export async function GET(request) {
 
 	try {
@@ -54,18 +65,7 @@ export async function GET(request) {
 
 		return new ImageResponse(
 			(
-				<div
-					style={{
-						display: 'flex',
-						height: '100%',
-						width: '100%',
-						alignItems: 'center',
-						justifyContent: 'center',
-						flexDirection: 'column',
-						backgroundColor: bgColor,
-						fontFamily: 'sans-serif',
-					}}
-				>
+				<div style={{ ...CARD_BASE, backgroundColor: bgColor }}>
 					<div style={{ display: 'flex', color: 'white', fontSize: 48, opacity: 0.9, marginBottom: 10 }}>
 						Tasa de cambio {coinConfig.name}
 					</div>
@@ -101,18 +101,7 @@ export async function GET(request) {
 		// Fallback image on error
 		return new ImageResponse(
 			(
-				<div
-					style={{
-						display: 'flex',
-						height: '100%',
-						width: '100%',
-						alignItems: 'center',
-						justifyContent: 'center',
-						flexDirection: 'column',
-						backgroundColor: '#3a405a',
-						fontFamily: 'sans-serif',
-					}}
-				>
+				<div style={{ ...CARD_BASE, backgroundColor: '#3a405a' }}>
 					<div style={{ display: 'flex', color: 'white', fontSize: 60, fontWeight: 700 }}>
 						CambioCUP
 					</div>

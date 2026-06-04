@@ -93,7 +93,7 @@ const FloatingOffer = memo(function FloatingOffer({ offer }) {
 				animationDelay: `${offer.delay}s`,
 			}}
 		>
-			<svg className={`w-4 h-4 ${isBuy ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+			<svg className={`size-4 ${isBuy ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
 				<path strokeLinecap="round" strokeLinejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
 			</svg>
 
@@ -101,11 +101,11 @@ const FloatingOffer = memo(function FloatingOffer({ offer }) {
 			<span className="text-xs opacity-80">{offer.coin}</span>
 
 			{isCompleted ? (
-				<svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+				<svg className="size-4" fill="currentColor" viewBox="0 0 20 20">
 					<path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
 				</svg>
 			) : (
-				<svg className="w-4 h-4 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+				<svg className="size-4 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
 					<path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
 				</svg>
 			)}

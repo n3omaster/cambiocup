@@ -179,13 +179,13 @@ function HomeContent() {
 								<pre className="border border-gray-200 p-4 rounded-lg whitespace-pre-wrap break-all text-sm" style={{ backgroundColor: '#f9fafb', color: '#111827' }}>
 									<code style={{ color: '#111827' }}>{iframeCode}</code>
 								</pre>
-								<button onClick={copyToClipboard} className="absolute top-2 right-2 p-2 rounded-md transition-all flex items-center justify-center bg-yale_blue/65 hover:bg-yale_blue backdrop-blur-sm shadow-sm" style={{ color: '#ffffff' }} aria-label={copied ? '¡Copiado!' : 'Copiar'} title={copied ? '¡Copiado!' : 'Copiar'}>
+								<button type="button" onClick={copyToClipboard} className="absolute top-2 right-2 p-2 rounded-md transition-all flex items-center justify-center bg-yale_blue/65 hover:bg-yale_blue backdrop-blur-sm shadow-sm" style={{ color: '#ffffff' }} aria-label={copied ? '¡Copiado!' : 'Copiar'} title={copied ? '¡Copiado!' : 'Copiar'}>
 									{copied ? (
-										<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+										<svg xmlns="http://www.w3.org/2000/svg" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 											<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
 										</svg>
 									) : (
-										<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+										<svg xmlns="http://www.w3.org/2000/svg" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 											<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
 										</svg>
 									)}

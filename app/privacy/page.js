@@ -1,4 +1,9 @@
 // Privacy Policy page
+export const metadata = {
+	title: 'Política de Privacidad - CambioCUP',
+	description: 'Política de privacidad de CambioCUP: no recopilamos ni almacenamos datos personales de los visitantes.',
+}
+
 export default function Privacy() {
 	return (
 		<div className="bg-malachite h-screen flex flex-col justify-center items-center">
