@@ -1,13 +1,18 @@
 'use client'
 
 import OneSignal from 'react-onesignal'
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useSearchParams } from 'next/navigation'
 import NumberFlow from '@number-flow/react'
+import { useSearchParams } from 'next/navigation'
+import { Suspense, useState, useEffect, useCallback, useMemo } from 'react'
+
+// Components
 import FloatingOffers from './components/FloatingOffers'
 import BackgroundLiveLine from './components/BackgroundLiveLine'
+
+// Utils
 import { randomize, averageData } from './utils/helpers'
 
+// Config
 const COIN_CONFIG = {
 	CUP: { historyKey: 'cupHistory', decimals: 2, deep: 0.5 },
 	MLC: { historyKey: 'mlcHistory', decimals: 3, deep: 0.009 },
@@ -18,7 +23,7 @@ const COIN_CONFIG = {
 
 const COINS = Object.keys(COIN_CONFIG)
 
-export default function Home() {
+function HomeContent() {
 
 	const searchParams = useSearchParams()
 	const noCode = searchParams.get('nocode') === 'true'
@@ -69,7 +74,7 @@ export default function Home() {
 		return () => window.removeEventListener('keydown', handleEscape)
 	}, [showModal])
 
-	const iframeCode = useMemo(() => `<iframe src="${typeof window !== 'undefined' ? window.location.origin : 'https://www.cambiocup.com'}" width="100%" height="600" frameborder="0" allowfullscreen style="border-radius: 5px;"></iframe>`, [])
+	const iframeCode = `<iframe src="${typeof window !== 'undefined' ? window.location.origin : 'https://www.cambiocup.com'}" width="100%" height="600" frameborder="0" allowfullscreen style="border-radius: 5px;"></iframe>`
 
 	const copyToClipboard = useCallback(async () => {
 		try {
@@ -90,6 +95,7 @@ export default function Home() {
 					<h1 className="text-center sm:text-left text-lg sm:text-xl md:text-2xl">Tasas de Cambio en Cuba</h1>
 					{!noCode && (
 						<button
+							type="button"
 							onClick={() => setShowModal(true)}
 							className="text-white hover:opacity-80 transition-opacity p-2 rounded-lg bg-white/10 backdrop-blur-sm hover:bg-white/20"
 							aria-label="Código iframe"
@@ -129,15 +135,15 @@ export default function Home() {
 				</div>
 
 				<div className='flex flex-col sm:flex-row justify-between items-center gap-2 sm:gap-0 text-xs sm:text-sm md:text-base'>
-					<div className='text-center sm:text-left'><p>{new Date().getFullYear()} - Todos los derechos reservados</p></div>
+					<div className='text-center sm:text-left'><p suppressHydrationWarning>{new Date().getFullYear()} - Todos los derechos reservados</p></div>
 					<div className='flex items-center gap-4'>
 						<a href='https://x.com/qvapay' target='_blank' rel='noopener noreferrer' className='hover:opacity-80 transition-opacity' aria-label='X (Twitter)'>
-							<svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+							<svg className="size-5" fill="currentColor" viewBox="0 0 24 24">
 								<path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
 							</svg>
 						</a>
 						<a href='https://github.com/n3omaster/cambiocup' target='_blank' rel='noopener noreferrer' className='hover:opacity-80 transition-opacity' aria-label='GitHub'>
-							<svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+							<svg className="size-5" fill="currentColor" viewBox="0 0 24 24">
 								<path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
 							</svg>
 						</a>
@@ -148,12 +154,19 @@ export default function Home() {
 
 			{/* Modal */}
 			{showModal && (
-				<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
+				<div
+					className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+					role="button"
+					tabIndex={0}
+					aria-label="Cerrar modal"
+					onClick={() => setShowModal(false)}
+					onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setShowModal(false) }}
+				>
 					<div className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto relative z-10 opacity-100" style={{ backgroundColor: '#ffffff' }} onClick={(e) => e.stopPropagation()} >
 						<div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-20" style={{ backgroundColor: '#ffffff' }}>
 							<h3 className="text-xl font-bold" style={{ color: '#111827' }}>Insertar la tasa en tu sitio web</h3>
-							<button onClick={() => setShowModal(false)} className="hover:opacity-70 transition-colors" style={{ color: '#6b7280' }} aria-label="Cerrar modal">
-								<svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<button type="button" onClick={() => setShowModal(false)} className="hover:opacity-70 transition-colors" style={{ color: '#6b7280' }} aria-label="Cerrar modal">
+								<svg xmlns="http://www.w3.org/2000/svg" className="size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 									<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
 								</svg>
 							</button>
@@ -188,5 +201,13 @@ export default function Home() {
 				</div>
 			)}
 		</>
+	)
+}
+
+export default function Home() {
+	return (
+		<Suspense fallback={null}>
+			<HomeContent />
+		</Suspense>
 	)
 }
