@@ -17,8 +17,10 @@ const formatValue = (value) => {
 export default function FloatingOffers() {
 
 	const [offers, setOffers] = useState([])
-	const seenIds = useRef(new Set())
-	const timeoutsRef = useRef(new Set())
+	const seenIds = useRef(null)
+	if (seenIds.current === null) seenIds.current = new Set()
+	const timeoutsRef = useRef(null)
+	if (timeoutsRef.current === null) timeoutsRef.current = new Set()
 
 	const addOffer = useCallback((offer) => {
 		if (seenIds.current.has(offer.id)) return

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { saveOffer } from '@/lib/supabase'
 
+const validCoins = ['CUP', 'MLC', 'CLASICA', 'ETECSA', 'TROPICAL']
+
 export async function POST(request) {
 
 	try {
@@ -18,7 +20,6 @@ export async function POST(request) {
 		if (!['attempt', 'completed'].includes(status)) { return NextResponse.json({ error: 'Invalid status. Must be "attempt" or "completed"' }, { status: 400 }) }
 
 		// Validate coin
-		const validCoins = ['CUP', 'MLC', 'CLASICA', 'ETECSA', 'TROPICAL']
 		if (!validCoins.includes(coin.toUpperCase())) { return NextResponse.json({ error: `Invalid coin. Must be one of: ${validCoins.join(', ')}` }, { status: 400 }) }
 
 		// Save to database

@@ -4,7 +4,7 @@ import { saveCoinData } from '@/lib/supabase'
 const QVAPAY_COINS = ['BANK_CUP', 'BANK_MLC', 'CLASICA', 'ETECSA', 'BANDECPREPAGO']
 
 const fetchAverage = async (coin) => {
-	const res = await fetch(`https://api.qvapay.com/p2p/completed_pairs_average?coin=${coin}`)
+	const res = await fetch(`https://api.qvapay.com/p2p/completed_pairs_average?coin=${coin}`, { cache: 'no-store' })
 	if (!res.ok) throw new Error(`QvaPay ${coin} responded ${res.status}`)
 	const { average_buy, average_sell } = await res.json()
 	return (average_buy + average_sell) / 2

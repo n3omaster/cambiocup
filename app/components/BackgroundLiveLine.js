@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Liveline } from 'liveline'
 
-const DAYS = 30
+const DAYS = 15
 const WINDOW_SECS = DAYS * 24 * 60 * 60
 
 export default function BackgroundLiveLine({ coin = 'CUP', value = 0, opacity = 0.22 }) {
@@ -11,7 +11,6 @@ export default function BackgroundLiveLine({ coin = 'CUP', value = 0, opacity = 
 
 	useEffect(() => {
 		let cancelled = false
-
 		const fetchData = async () => {
 			try {
 				const response = await fetch(`/api/history?coin=${coin}&days=${DAYS}`)
@@ -19,7 +18,6 @@ export default function BackgroundLiveLine({ coin = 'CUP', value = 0, opacity = 
 				if (!cancelled && Array.isArray(points)) setData(points)
 			} catch (error) { console.error('Error fetching chart data:', error) }
 		}
-
 		fetchData()
 		const interval = setInterval(fetchData, 30000)
 		return () => {
