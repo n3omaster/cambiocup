@@ -3,10 +3,10 @@
 import { memo, useState, useEffect, useCallback, useRef } from 'react'
 
 const STYLES = {
-	'buy-completed': { bg: 'bg-emerald-500/95', border: 'border-emerald-300 border-2', shadow: 'shadow-lg shadow-emerald-500/30' },
-	'buy-attempt': { bg: 'bg-emerald-400/70', border: 'border-emerald-200 border-2 border-dashed', shadow: 'shadow-md' },
-	'sell-completed': { bg: 'bg-red-500/95', border: 'border-red-300 border-2', shadow: 'shadow-lg shadow-red-500/30' },
-	'sell-attempt': { bg: 'bg-red-400/70', border: 'border-red-200 border-2 border-dashed', shadow: 'shadow-md' },
+	'buy-completed': 'liquid-glass liquid-glass--emerald',
+	'buy-attempt': 'liquid-glass liquid-glass--emerald-soft',
+	'sell-completed': 'liquid-glass liquid-glass--red',
+	'sell-attempt': 'liquid-glass liquid-glass--red-soft',
 }
 
 const formatValue = (value) => {
@@ -81,11 +81,11 @@ export default function FloatingOffers() {
 const FloatingOffer = memo(function FloatingOffer({ offer }) {
 	const isBuy = offer.type === 'buy'
 	const isCompleted = offer.status === 'completed'
-	const styles = STYLES[`${isBuy ? 'buy' : 'sell'}-${isCompleted ? 'completed' : 'attempt'}`]
+	const glass = STYLES[`${isBuy ? 'buy' : 'sell'}-${isCompleted ? 'completed' : 'attempt'}`]
 
 	return (
 		<div
-			className={`absolute bottom-0 ${styles.bg} ${styles.border} ${styles.shadow} backdrop-blur-md rounded-full px-4 py-2 flex items-center gap-2 text-white text-sm font-medium animate-float-up`}
+			className={`absolute bottom-0 ${glass} rounded-full px-4 py-2 flex items-center gap-2 text-white text-sm font-medium animate-float-up`}
 			style={{
 				left: `${offer.leftPosition}%`,
 				transform: 'translateX(-50%)',

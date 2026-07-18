@@ -24,6 +24,29 @@ const COIN_CONFIG = {
 
 const COINS = Object.keys(COIN_CONFIG)
 
+// Displacement map for the Liquid Glass lens: R channel encodes X shift, G encodes Y
+// (128 = neutral). Edges sample INWARD (rim compression, like iOS) — sampling outward
+// would read past the element's backdrop buffer and Chrome clamps the edge rows,
+// which shows up as ugly horizontal streaks. The blurred neutral-gray center keeps
+// the middle of the glass undistorted.
+const GLASS_MAP = `<svg xmlns='http://www.w3.org/2000/svg' width='400' height='160'><defs><linearGradient id='x' x1='0' y1='0' x2='1' y2='0'><stop offset='0' stop-color='#f00'/><stop offset='1' stop-color='#000'/></linearGradient><linearGradient id='y' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='#0f0'/><stop offset='1' stop-color='#000'/></linearGradient></defs><rect width='400' height='160' fill='#000'/><rect width='400' height='160' fill='url(#x)'/><rect width='400' height='160' fill='url(#y)' style='mix-blend-mode:screen'/><rect x='16' y='16' width='368' height='128' rx='64' fill='#808080' style='filter:blur(12px)'/></svg>`
+
+const GLASS_MAP_URI = `data:image/svg+xml,${encodeURIComponent(GLASS_MAP)}`
+
+// Blur → edge-refract → saturate, applied to .liquid-glass via backdrop-filter:url()
+function GlassLensFilter() {
+	return (
+		<svg aria-hidden="true" width="0" height="0" style={{ position: 'absolute' }}>
+			<filter id="glass-lens" colorInterpolationFilters="sRGB">
+				<feImage href={GLASS_MAP_URI} x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="map" />
+				<feDisplacementMap in="SourceGraphic" in2="map" scale="36" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+				<feGaussianBlur in="displaced" stdDeviation="8" result="blurred" />
+				<feColorMatrix in="blurred" type="saturate" values="1.35" />
+			</filter>
+		</svg>
+	)
+}
+
 function HomeContent() {
 
 	const searchParams = useSearchParams()
@@ -41,6 +64,13 @@ function HomeContent() {
 
 	useEffect(() => {
 		OneSignal.init({ appId: '04dffeef-fbcd-4c21-95fc-eb358400eff2' })
+	}, [])
+
+	useEffect(() => {
+		// SVG filters in backdrop-filter only render in Chromium; everyone else keeps the CSS glass
+		if (window.chrome && CSS.supports('backdrop-filter', 'url(#glass-lens)')) {
+			document.documentElement.classList.add('glass-refract')
+		}
 	}, [])
 
 	useEffect(() => {
@@ -92,6 +122,7 @@ function HomeContent() {
 
 	return (
 		<>
+			<GlassLensFilter />
 			<FloatingOffers />
 			<main className={bgColor + " flex min-h-screen flex-col justify-between p-4 sm:p-8 md:p-12 relative z-20 overflow-hidden"}>
 				<BackgroundLiveLine coin={coin} value={value} opacity={0.3} />
@@ -105,7 +136,7 @@ function HomeContent() {
 				<header className='relative z-10 flex flex-col sm:flex-row justify-between items-center gap-3 sm:gap-0'>
 					<div className='flex items-center gap-3'>
 						<h1 className="text-center sm:text-left text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight">Tasas de Cambio en Cuba</h1>
-						<span className="hidden sm:inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-medium backdrop-blur-md">
+						<span className="hidden sm:inline-flex items-center gap-2 rounded-full liquid-glass px-3 py-1 text-xs font-medium">
 							<span className="relative flex size-2">
 								<span className="absolute inline-flex size-full animate-ping rounded-full bg-white opacity-75" />
 								<span className="relative inline-flex size-2 rounded-full bg-white" />
@@ -117,7 +148,7 @@ function HomeContent() {
 						<button
 							type="button"
 							onClick={() => setShowModal(true)}
-							className="text-white transition-all p-2.5 rounded-2xl border border-white/15 bg-white/10 backdrop-blur-md hover:bg-white/20 hover:scale-105 active:scale-95"
+							className="text-white p-2.5 rounded-2xl liquid-glass hover:scale-105 active:scale-95"
 							aria-label="Código iframe"
 							title="Obtener código iframe"
 						>
@@ -131,7 +162,7 @@ function HomeContent() {
 				<div className="relative z-10 flex-1 flex flex-col items-center justify-center px-2 sm:px-4">
 
 					{/* Coin selector — glass segmented control */}
-					<div className="mb-6 sm:mb-10 flex flex-wrap justify-center gap-1 rounded-full border border-white/15 bg-white/10 p-1.5 backdrop-blur-md shadow-lg shadow-black/10">
+					<div className="mb-6 sm:mb-10 flex flex-wrap justify-center gap-1 rounded-full liquid-glass p-1.5">
 						{COINS.map((name) => (
 							<button
 								key={name}
@@ -162,12 +193,12 @@ function HomeContent() {
 					{/* Context chips: unit + trend */}
 					<div className="mt-5 sm:mt-8 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
 						{config.unit && (
-							<span className="rounded-full border border-white/15 bg-white/10 px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90 backdrop-blur-md">
+							<span className="rounded-full liquid-glass px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90">
 								{config.unit}
 							</span>
 						)}
 						{trendPct !== null && (
-							<span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-black/20 px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90 backdrop-blur-md tabular-nums">
+							<span className="inline-flex items-center gap-1.5 rounded-full liquid-glass liquid-glass--dark px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90 tabular-nums">
 								<span aria-hidden="true">{trendPct < 0 ? '▼' : '▲'}</span>
 								{Math.abs(trendPct).toFixed(2)}% vs promedio reciente
 							</span>
