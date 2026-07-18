@@ -161,22 +161,27 @@ function HomeContent() {
 
 				<div className="relative z-10 flex-1 flex flex-col items-center justify-center px-2 sm:px-4">
 
-					{/* Coin selector — glass segmented control */}
-					<div className="mb-6 sm:mb-10 flex flex-wrap justify-center gap-1 rounded-full liquid-glass p-1.5">
-						{COINS.map((name) => (
-							<button
-								key={name}
-								type="button"
-								onClick={() => setCoin(name)}
-								aria-pressed={coin === name}
-								className={`${coin === name
-									? "bg-white text-black shadow-md"
-									: "text-white/70 hover:text-white hover:bg-white/10"
-									} rounded-full px-3 py-1.5 sm:px-5 sm:py-2 text-sm sm:text-base md:text-lg font-bold tracking-tight transition-all whitespace-nowrap`}
-							>
-								{name}
-							</button>
-						))}
+					{/* Coin selector — glass segmented control (single scrollable row on mobile) */}
+					<div className="mb-6 sm:mb-10 max-w-full rounded-full liquid-glass p-1.5">
+						<div className="flex gap-1 overflow-x-auto no-scrollbar snap-x rounded-full">
+							{COINS.map((name) => (
+								<button
+									key={name}
+									type="button"
+									onClick={(e) => {
+										setCoin(name)
+										e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+									}}
+									aria-pressed={coin === name}
+									className={`${coin === name
+										? "bg-white text-black shadow-md"
+										: "text-white/70 hover:text-white hover:bg-white/10"
+										} shrink-0 snap-center rounded-full px-3.5 py-1.5 sm:px-5 sm:py-2 text-sm sm:text-base md:text-lg font-bold tracking-tight transition-all whitespace-nowrap`}
+								>
+									{name}
+								</button>
+							))}
+						</div>
 					</div>
 
 					<h2 className="text-6xl sm:text-8xl md:text-8xl lg:text-[10rem] xl:text-[12rem] font-extrabold text-white text-center tracking-tighter drop-shadow-[0_10px_50px_rgba(0,0,0,0.3)]">

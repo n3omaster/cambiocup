@@ -208,6 +208,16 @@ main {
 	backdrop-filter: var(--glass-lens);
 }
 
+/* Hide the scrollbar on horizontal scrollers (coin selector on mobile) */
+.no-scrollbar {
+	scrollbar-width: none;
+	-ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+	display: none;
+}
+
 /* Floating offers animation */
 @keyframes float-up {
 	0% {
