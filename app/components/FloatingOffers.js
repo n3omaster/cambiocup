@@ -85,7 +85,7 @@ const FloatingOffer = memo(function FloatingOffer({ offer }) {
 
 	return (
 		<div
-			className={`absolute bottom-0 ${styles.bg} ${styles.border} ${styles.shadow} backdrop-blur-sm rounded-lg px-3 py-2 flex items-center gap-2 text-white text-sm font-medium animate-float-up`}
+			className={`absolute bottom-0 ${styles.bg} ${styles.border} ${styles.shadow} backdrop-blur-md rounded-full px-4 py-2 flex items-center gap-2 text-white text-sm font-medium animate-float-up`}
 			style={{
 				left: `${offer.leftPosition}%`,
 				transform: 'translateX(-50%)',

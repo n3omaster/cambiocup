@@ -43,6 +43,8 @@ export default function BackgroundLiveLine({ coin = 'CUP', value = 0, opacity = 
 				zIndex: 0,
 				pointerEvents: 'none',
 				opacity,
+				// soft halo so the line reads over any bg color without raising opacity too much
+				filter: 'drop-shadow(0 0 14px rgba(255, 255, 255, 0.45))',
 			}}
 		>
 			<Liveline
@@ -51,10 +53,10 @@ export default function BackgroundLiveLine({ coin = 'CUP', value = 0, opacity = 
 				color="#ffffff"
 				theme="dark"
 				window={windowSecs}
-				lineWidth={1.5}
+				lineWidth={2}
 				grid={false}
 				badge={false}
-				pulse={false}
+				pulse
 				scrub={false}
 				fill
 				momentum={false}

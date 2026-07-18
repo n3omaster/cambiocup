@@ -12,12 +12,14 @@ const COINS = {
 	CLASICA: { name: 'CLASICA', decimals: 3, coinId: 'clasicaHistory' },
 	ETECSA: { name: 'ETECSA', decimals: 2, coinId: 'etecsaHistory' },
 	TROPICAL: { name: 'TROPICAL', decimals: 2, coinId: 'bandecprepagoHistory' },
+	GAS: { name: 'GAS', decimals: 2, coinId: 'gasHistory' },
 }
 
 // Colors
 const COLORS = {
 	green: '#53dd6c',
 	red: '#d7263d',
+	neutral: '#3a405a',
 }
 
 // Shared container layout for the OG card (Satori requires inline styles)
@@ -52,9 +54,9 @@ export async function GET(request) {
 		const currentValue = history[0].value
 		const average = history.reduce((sum, item) => sum + item.value, 0) / history.length
 
-		// Determine color based on trend
-		const bgColor = currentValue < average ? COLORS.green : COLORS.red
-		const trendText = currentValue < average ? '↓' : '↑'
+		// Determine color based on trend (equal = fixed price, e.g. GAS)
+		const bgColor = currentValue < average ? COLORS.green : currentValue > average ? COLORS.red : COLORS.neutral
+		const trendText = currentValue < average ? '↓' : currentValue > average ? '↑' : '•'
 
 		// Format value
 		const formattedValue = currentValue.toFixed(coinConfig.decimals)

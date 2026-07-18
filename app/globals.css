@@ -5,6 +5,21 @@
 	--font-sans: Barlow, sans-serif;
 
 	--color-*: initial;
+
+	/* --color-*: initial wipes Tailwind's default palette — re-add the tokens the app uses */
+	--color-white: #ffffff;
+	--color-black: #000000;
+	--color-gray-100: #f3f4f6;
+	--color-gray-200: #e5e7eb;
+	--color-emerald-200: #a7f3d0;
+	--color-emerald-300: #6ee7b8;
+	--color-emerald-400: #34d399;
+	--color-emerald-500: #10b981;
+	--color-red-200: #fecaca;
+	--color-red-300: #fca5a5;
+	--color-red-400: #f87171;
+	--color-red-500: #ef4444;
+
 	--color-malachite-100: #0a3312;
 	--color-malachite-200: #146623;
 	--color-malachite-300: #1e9935;

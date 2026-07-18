@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { saveOffer } from '@/lib/supabase'
 
-const validCoins = ['CUP', 'MLC', 'CLASICA', 'ETECSA', 'TROPICAL']
+const validCoins = ['CUP', 'MLC', 'CLASICA', 'ETECSA', 'TROPICAL', 'GAS']
 
 export async function POST(request) {
 
