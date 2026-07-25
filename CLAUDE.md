@@ -37,6 +37,9 @@ app/
 ├── globals.css                # Tailwind theme (@theme), custom colors, float-up animation
 ├── loading.js                 # Loading state
 ├── privacy/page.js            # Privacy policy page
+├── play/
+│   ├── page.js                # Server component (metadata) for the game route
+│   └── Game.js                # "CUP Runner" canvas game (client) — terrain from real CUP history
 ├── components/
 │   ├── FloatingOffers.js      # Animated buy/sell offer bubbles (polls /api/offers every 3s)
 │   └── BackgroundLiveLine.js  # Full-screen Liveline chart background (polls /api/history every 30s, 15 days)
@@ -47,6 +50,7 @@ app/
     ├── cron/route.js           # GET → fetch from QvaPay API, save to Supabase
     ├── offers/route.js         # GET → recent offers (last 2 minutes)
     ├── history/route.js        # GET ?coin=CUP&days=7 → chart data
+    ├── game-history/route.js   # GET ?coin=CUP → full history for the game (parallel pagination + bucketing)
     ├── og/route.js             # GET ?coin=CUP → dynamic OG image (1200×630)
     └── webhook/route.js        # POST → save new offer (type, status, value, coin)
 lib/
@@ -63,6 +67,7 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 | `/api/cron` | GET | — | Fetches 5 coins from QvaPay, saves averages to DB |
 | `/api/offers` | GET | — | Returns offers created in last 2 minutes |
 | `/api/history` | GET | `coin`, `days` | Returns `{data: [{time, value}], coin}` — `time` is a unix timestamp in seconds |
+| `/api/game-history` | GET | `coin` | Full history for the `/play` game: counts rows, pages past the 1000-row cap in parallel, buckets to ~2000 averaged points. Edge-cached 1h |
 | `/api/og` | GET | `coin` | Generates dynamic Open Graph image with current rate and trend |
 | `/api/webhook` | POST | `{type, status, value, coin}` | Validates and saves a new offer |
 

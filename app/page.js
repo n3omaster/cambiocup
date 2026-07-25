@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import OneSignal from 'react-onesignal'
 import NumberFlow from '@number-flow/react'
 import { useSearchParams } from 'next/navigation'
@@ -144,19 +145,32 @@ function HomeContent() {
 							En vivo
 						</span>
 					</div>
-					{!noCode && (
-						<button
-							type="button"
-							onClick={() => setShowModal(true)}
-							className="text-white p-2.5 rounded-2xl liquid-glass hover:scale-105 active:scale-95"
-							aria-label="Código iframe"
-							title="Obtener código iframe"
+					<div className="flex items-center gap-2 sm:gap-3">
+						<Link
+							href="/play"
+							className="inline-flex items-center gap-2 text-white px-4 py-2 sm:py-2.5 rounded-2xl liquid-glass hover:scale-105 active:scale-95 text-sm sm:text-base font-bold"
+							aria-label="Jugar CUP Runner"
+							title="Jugar CUP Runner"
 						>
-							<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 sm:h-6 sm:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+							<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" fill="currentColor" viewBox="0 0 24 24">
+								<path d="M8 5.14v13.72c0 .8.87 1.3 1.56.88l11.2-6.86a1.03 1.03 0 000-1.76L9.56 4.26A1.03 1.03 0 008 5.14z" />
 							</svg>
-						</button>
-					)}
+							Jugar
+						</Link>
+						{!noCode && (
+							<button
+								type="button"
+								onClick={() => setShowModal(true)}
+								className="text-white p-2.5 rounded-2xl liquid-glass hover:scale-105 active:scale-95"
+								aria-label="Código iframe"
+								title="Obtener código iframe"
+							>
+								<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 sm:h-6 sm:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+								</svg>
+							</button>
+						)}
+					</div>
 				</header>
 
 				<div className="relative z-10 flex-1 flex flex-col items-center justify-center px-2 sm:px-4">
