@@ -26,11 +26,15 @@ const mulberry32 = (seed) => () => {
 	return ((t ^ (t >>> 14)) >>> 0) / 4294967296
 }
 
-// Retro arcade SFX synthesized with Web Audio — no files, no latency.
-// The context resumes lazily on the first user gesture (jump), per browser policy.
+// Game SFX: real coin recordings (public/sounds/*, CC0 from OpenGameArt) played
+// via Web Audio buffers for zero latency, with synthesized fallbacks while they
+// load. The context resumes lazily on the first user gesture, per browser policy.
 const createAudio = () => {
 
 	let ctx = null
+	const buffers = {}
+	let preloaded = false
+
 	const ensure = () => {
 		if (!ctx) {
 			const AC = window.AudioContext || window.webkitAudioContext
@@ -39,6 +43,35 @@ const createAudio = () => {
 		}
 		if (ctx.state === 'suspended') ctx.resume()
 		return ctx
+	}
+
+	const preload = () => {
+		if (preloaded) return
+		preloaded = true
+		const ac = ensure()
+		if (!ac) return
+		for (const [name, url] of [['jump', '/sounds/coin-jump.mp3'], ['death', '/sounds/coin-death.mp3']]) {
+			fetch(url)
+				.then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(url))))
+				.then((raw) => ac.decodeAudioData(raw))
+				.then((decoded) => { buffers[name] = decoded })
+				.catch(() => { /* synth fallback keeps working */ })
+		}
+	}
+
+	const playBuffer = (name, { vol = 0.4, rate = 1 } = {}) => {
+		const ac = ensure()
+		const buffer = buffers[name]
+		if (!ac || !buffer) return false
+		const src = ac.createBufferSource()
+		src.buffer = buffer
+		src.playbackRate.value = rate
+		const gain = ac.createGain()
+		gain.gain.value = vol
+		src.connect(gain)
+		gain.connect(ac.destination)
+		src.start()
+		return true
 	}
 
 	const blip = ({ from, to, dur, type = 'square', vol = 0.12, delay = 0 }) => {
@@ -80,16 +113,27 @@ const createAudio = () => {
 	}
 
 	return {
-		jump: () => blip({ from: 320, to: 750, dur: 0.12 }),
-		doubleJump: () => blip({ from: 480, to: 1100, dur: 0.14 }),
+		preload,
+		// Real coin flick; the double jump replays it faster/brighter
+		jump: () => {
+			if (!playBuffer('jump', { vol: 0.45 })) blip({ from: 320, to: 750, dur: 0.12 })
+		},
+		doubleJump: () => {
+			if (!playBuffer('jump', { vol: 0.45, rate: 1.25 })) blip({ from: 480, to: 1100, dur: 0.14 })
+		},
 		coin: (combo = 1) => {
 			const lift = Math.min(combo, 20) * 28
 			blip({ from: 880 + lift, to: 1500 + lift, dur: 0.09, type: 'sine', vol: 0.1 })
 		},
+		// Real coins dropping and settling, with a soft low thud underneath for weight
 		death: () => {
-			blip({ from: 500, to: 55, dur: 0.5, type: 'sawtooth', vol: 0.18 })
-			blip({ from: 240, to: 50, dur: 0.6, vol: 0.1, delay: 0.05 })
-			crash({})
+			if (playBuffer('death', { vol: 0.6 })) {
+				blip({ from: 160, to: 50, dur: 0.4, type: 'sine', vol: 0.1 })
+			} else {
+				blip({ from: 500, to: 55, dur: 0.5, type: 'sawtooth', vol: 0.18 })
+				blip({ from: 240, to: 50, dur: 0.6, vol: 0.1, delay: 0.05 })
+				crash({})
+			}
 		},
 	}
 }
@@ -309,6 +353,7 @@ export default function Game() {
 		const ctx = canvas.getContext('2d')
 		if (!audioRef.current) audioRef.current = createAudio()
 		const audio = audioRef.current
+		audio.preload() // fetch + decode the real coin recordings (no-op after the first run)
 		const { values, times, heights, spikes, coins, stars, n } = courseRef.current
 		const holes = [...courseRef.current.holes] // local copy — live craters must not persist across runs
 		const nominal = values[n - 1] // today's rate: the "valor nominal" live offers compare against
