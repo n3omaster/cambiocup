@@ -51,6 +51,7 @@ app/
     ├── offers/route.js         # GET → recent offers (last 2 minutes)
     ├── history/route.js        # GET ?coin=CUP&days=7 → chart data
     ├── game-history/route.js   # GET ?coin=CUP → full history for the game (parallel pagination + bucketing)
+    ├── game-score/route.js     # GET → leaderboard (top 10 + runs) / POST → save run, returns global rank
     ├── og/route.js             # GET ?coin=CUP → dynamic OG image (1200×630)
     └── webhook/route.js        # POST → save new offer (type, status, value, coin)
 lib/
@@ -68,6 +69,7 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 | `/api/offers` | GET | — | Returns offers created in last 2 minutes |
 | `/api/history` | GET | `coin`, `days` | Returns `{data: [{time, value}], coin}` — `time` is a unix timestamp in seconds |
 | `/api/game-history` | GET | `coin` | Full history for the `/play` game: counts rows, pages past the 1000-row cap in parallel, buckets to ~2000 averaged points. Edge-cached 1h |
+| `/api/game-score` | GET / POST | POST: `{name, score, day}` | Game leaderboard. GET returns `{top: [best score per player, max 10], runs}`; POST validates and saves a run, returns `{rank}` |
 | `/api/og` | GET | `coin` | Generates dynamic Open Graph image with current rate and trend |
 | `/api/webhook` | POST | `{type, status, value, coin}` | Validates and saves a new offer |
 
@@ -79,6 +81,10 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 
 **`offers` table** — Buy/sell transaction records:
 - `id`, `type` ('buy'|'sell'), `status` ('attempt'|'completed'), `value` (float), `coin` (string), `created_at`
+
+**`game_scores` table** — CUP Runner leaderboard (one row per finished run):
+- `id`, `name` (Telegram handle, normalized `@lowercase`, 6-33 chars), `score` (int), `day` (int), `created_at`
+- Index on `score desc`; RLS allows anon insert/select. The Telegram @ is used to contact weekly winners
 
 Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders newest-first so the cap keeps recent data, then reverses back to chronological order for charts.
 

@@ -10,6 +10,14 @@ const JUMP_V = 950
 const BASE_SPEED = 250
 const MAX_EXTRA_SPEED = 220
 const BEST_KEY = 'cambiocup:play:best'
+const NAME_KEY = 'cambiocup:play:name'
+
+// Telegram username: 5-32 chars, letters/digits/underscore, starts with a letter.
+// Returns the normalized handle ("@usuario", lowercase) or null if invalid.
+const normalizeTg = (raw) => {
+	const user = String(raw || '').trim().replace(/^@+/, '')
+	return /^[a-zA-Z][a-zA-Z0-9_]{4,31}$/.test(user) ? `@${user.toLowerCase()}` : null
+}
 
 const mulberry32 = (seed) => () => {
 	seed |= 0; seed = (seed + 0x6D2B79F5) | 0
@@ -241,13 +249,33 @@ export default function Game() {
 	const [death, setDeath] = useState(null)
 	const [best, setBest] = useState(null)
 	const [share, setShare] = useState(null) // {url, blob} — captured death-frame card
+	const [playerName, setPlayerName] = useState('')
+	const [nameDraft, setNameDraft] = useState('')
+	const [nameError, setNameError] = useState(false)
+	const [board, setBoard] = useState(null) // {top: [...], runs}
+	const [rank, setRank] = useState(null)
+	const submittedRef = useRef(false) // one submission per death
 
 	useEffect(() => {
-		try { setBest(JSON.parse(localStorage.getItem(BEST_KEY))) } catch { /* first run */ }
+		try {
+			setBest(JSON.parse(localStorage.getItem(BEST_KEY)))
+			// Only accept a stored name if it's a valid Telegram handle (older saves may predate the @ format)
+			const savedName = normalizeTg(localStorage.getItem(NAME_KEY))
+			if (savedName) { setPlayerName(savedName); setNameDraft(savedName.slice(1)) }
+		} catch { /* first run */ }
 		const img = new Image()
 		img.src = '/cup.png'
 		coinImgRef.current = img
 	}, [])
+
+	const fetchBoard = useCallback(async () => {
+		try {
+			const res = await fetch('/api/game-score')
+			if (res.ok) setBoard(await res.json())
+		} catch { /* leaderboard is optional decoration */ }
+	}, [])
+
+	useEffect(() => { fetchBoard() }, [fetchBoard])
 
 	// Load the real CUP history (full series, bucketed server-side)
 	useEffect(() => {
@@ -473,7 +501,9 @@ export default function Game() {
 				const dx = Math.abs(pwx - sx)
 				if (dx < s.w / 2) {
 					const baseY = terrainY(sx)
-					const surfY = baseY - s.h * (1 - dx / (s.w / 2))
+					// Squared falloff matches the thorn's concave flanks (kinder than the old triangle)
+					const frac = 1 - dx / (s.w / 2)
+					const surfY = baseY - s.h * frac * frac
 					if (py + R * 0.7 > surfY) { die(); return }
 				}
 			}
@@ -539,14 +569,39 @@ export default function Game() {
 			}
 			ctx.globalAlpha = 1
 
-			// Terrain: contiguous runs of samples (holes split them)
+			// Spikes ARE the chart: the line itself shoots up into a sharp red peak
+			// (like a price wick), so they're born from the line by construction
+			const nearSpikes = []
+			for (const s of spikes) {
+				const screenX = s.i * DX - worldX
+				if (screenX > -150 && screenX < W + 150) {
+					const g = Math.min(1, Math.max(0, (W + 40 - screenX) / 160))
+					nearSpikes.push({ s, grow: 1 - (1 - g) * (1 - g) })
+				}
+			}
+			const bumpAt = (wx) => {
+				let bump = 0
+				for (const { s, grow } of nearSpikes) {
+					const half = s.w / 2 + 12 // wide foot for a gentle takeoff
+					const dx = Math.abs(wx - s.i * DX)
+					if (dx < half) {
+						const frac = 1 - dx / half
+						const ss = frac * frac * (3 - 2 * frac) // smoothstep: zero-slope exit from the line
+						bump = Math.max(bump, s.h * grow * ss ** 1.7)
+					}
+				}
+				return bump
+			}
+			const lineY = (wx) => terrainY(wx) - bumpAt(wx)
+
+			// Terrain: contiguous runs of samples (holes split them); spikes included in the path
 			const runs = []
 			let run = null
-			for (let sx = -10; sx <= W + 10; sx += 7) {
+			for (let sx = -10; sx <= W + 10; sx += 4) {
 				const wx = worldX + sx
 				if (holeAt(wx)) { run = null; continue }
 				if (!run) { run = []; runs.push(run) }
-				run.push({ sx, y: terrainY(wx) })
+				run.push({ sx, y: lineY(wx) })
 			}
 			for (const r of runs) {
 				if (r.length < 2) continue
@@ -575,21 +630,66 @@ export default function Game() {
 				ctx.shadowBlur = 0
 			}
 
-			// Spikes
-			for (const s of spikes) {
-				const sx = s.i * DX - worldX
-				if (sx < -60 || sx > W + 60) continue
-				const baseY = terrainY(s.i * DX)
-				ctx.fillStyle = '#d7263d'
-				ctx.shadowColor = '#d7263d'
-				ctx.shadowBlur = 14
+			// Repaint the spiking stretch of the line in crimson, fading back into
+			// green at both ends, with a red inner tint and a smoldering peak
+			for (const { s, grow } of nearSpikes) {
+				if (grow <= 0.02) continue
+				const wx0 = s.i * DX
+				const half = s.w / 2 + 12
+				const xA = wx0 - half - 8
+				const xB = wx0 + half + 8
+				const pulse = 0.5 + 0.5 * Math.sin(elapsed * 3 + s.i * 1.7)
+
+				const crest = []
+				for (let wx = xA; wx <= xB; wx += 3) {
+					if (holeAt(wx)) continue
+					crest.push([wx - worldX, lineY(wx)])
+				}
+				if (crest.length < 2) continue
+
+				const baseY = terrainY(wx0)
+				const peakY = baseY - s.h * grow
+
+				// Inner tint: the spike glows red from within the terrain fill
+				const tint = ctx.createLinearGradient(0, peakY, 0, baseY)
+				tint.addColorStop(0, `rgba(215, 38, 61, ${0.4 + pulse * 0.1})`)
+				tint.addColorStop(1, 'rgba(215, 38, 61, 0)')
+				ctx.fillStyle = tint
 				ctx.beginPath()
-				ctx.moveTo(sx - s.w / 2, baseY)
-				ctx.lineTo(sx, baseY - s.h)
-				ctx.lineTo(sx + s.w / 2, baseY)
+				ctx.moveTo(crest[0][0], crest[0][1])
+				for (const [x, y] of crest) ctx.lineTo(x, y)
 				ctx.closePath()
 				ctx.fill()
+
+				// Heat ramp along the climb: the line warms up with altitude —
+				// green at the foot, yellow → amber → orange → crimson at the peak
+				const grad = ctx.createLinearGradient(0, baseY + 2, 0, peakY)
+				grad.addColorStop(0, 'rgba(140, 225, 130, 0)')
+				grad.addColorStop(0.12, 'rgba(216, 226, 100, 0.45)')
+				grad.addColorStop(0.3, 'rgba(255, 178, 86, 0.85)')
+				grad.addColorStop(0.55, '#ff7a5a')
+				grad.addColorStop(1, '#ff4d63')
+				ctx.strokeStyle = grad
+				ctx.lineWidth = 3.5
+				ctx.lineJoin = 'round'
+				ctx.shadowColor = 'rgba(224, 56, 79, 0.95)'
+				ctx.shadowBlur = 13 + pulse * 8
+				ctx.beginPath()
+				ctx.moveTo(crest[0][0], crest[0][1])
+				for (const [x, y] of crest) ctx.lineTo(x, y)
+				ctx.stroke()
 				ctx.shadowBlur = 0
+
+				// Peak ember
+				const emberR = 6 + pulse * 4
+				const px = wx0 - worldX
+				const ember = ctx.createRadialGradient(px, peakY, 0, px, peakY, emberR)
+				ember.addColorStop(0, `rgba(255, 220, 226, ${0.7 + pulse * 0.3})`)
+				ember.addColorStop(1, 'rgba(255, 114, 133, 0)')
+				ctx.fillStyle = ember
+				ctx.beginPath()
+				ctx.arc(px, peakY, emberR, 0, Math.PI * 2)
+				ctx.fill()
 			}
 
 			// Coins
@@ -808,10 +908,38 @@ export default function Game() {
 		} catch { /* user cancelled */ }
 	}, [share, shareText])
 
+	const submitScore = useCallback(async (name) => {
+		if (!death || submittedRef.current) return
+		submittedRef.current = true
+		try {
+			localStorage.setItem(NAME_KEY, name)
+			setPlayerName(name)
+			const res = await fetch('/api/game-score', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name, score: death.score, day: death.day }),
+			})
+			if (res.ok) {
+				const json = await res.json()
+				setRank(json.rank)
+				fetchBoard()
+			} else {
+				submittedRef.current = false
+			}
+		} catch { submittedRef.current = false }
+	}, [death, fetchBoard])
+
+	// Known player: submit automatically the moment the death screen appears
+	useEffect(() => {
+		if (status === 'dead' && death && playerName) submitScore(playerName)
+	}, [status, death, playerName, submitScore])
+
 	const restart = useCallback(() => {
 		if (share) URL.revokeObjectURL(share.url)
 		setShare(null)
 		setDeath(null)
+		setRank(null)
+		submittedRef.current = false
 		setStatus('playing')
 	}, [share])
 
@@ -862,6 +990,22 @@ export default function Game() {
 							🏆 Tu récord: {best.score.toLocaleString('es')} CUP — día {best.day}
 						</p>
 					)}
+					{board?.top?.length > 0 && (
+						<div className="w-full max-w-xs rounded-2xl liquid-glass liquid-glass--dark px-5 py-4 text-left">
+							<p className="mb-2 flex justify-between text-[11px] font-bold tracking-[0.2em] text-white/50">
+								<span>🌍 TOP 5 MUNDIAL</span>
+								<span className="tabular-nums">{board.runs.toLocaleString('es')} partidas</span>
+							</p>
+							{board.top.slice(0, 5).map((row, i) => (
+								<div key={`${row.name}-${i}`} className="flex items-center justify-between gap-3 py-0.5 text-sm">
+									<span className={`truncate font-medium ${row.name === playerName ? 'text-malachite-500' : 'text-white/80'}`}>
+										{['🥇', '🥈', '🥉'][i] || `${i + 1}.`} {row.name}
+									</span>
+									<span className="shrink-0 tabular-nums font-bold text-[#ffd75e]">{row.score.toLocaleString('es')}</span>
+								</div>
+							))}
+						</div>
+					)}
 					<button
 						type="button"
 						onClick={() => setStatus('playing')}
@@ -892,8 +1036,56 @@ export default function Game() {
 						</div>
 					)}
 
-					{death.isRecord && (
-						<span className="inline-flex h-10 items-center rounded-full bg-malachite-500 px-5 text-sm font-bold text-black">🏆 ¡Nuevo récord!</span>
+					<div className="flex flex-wrap items-center justify-center gap-2.5">
+						{death.isRecord && (
+							<span className="inline-flex h-10 items-center rounded-full bg-malachite-500 px-5 text-sm font-bold text-black">🏆 ¡Nuevo récord!</span>
+						)}
+						{rank && (
+							<span className="inline-flex h-10 items-center rounded-full liquid-glass px-5 text-sm font-bold tabular-nums text-white/90">
+								🌍 #{rank}{board?.runs ? ` de ${board.runs.toLocaleString('es')} partidas` : ''}
+							</span>
+						)}
+					</div>
+
+					{!playerName && (
+						<form
+							onSubmit={(e) => {
+								e.preventDefault()
+								const name = normalizeTg(nameDraft)
+								if (name) submitScore(name)
+								else setNameError(true)
+							}}
+							className="flex flex-col items-center gap-2"
+						>
+							<div className="flex items-center gap-2">
+								<div className={`flex h-11 items-center rounded-full border bg-white/10 pl-4 transition-colors focus-within:border-malachite-500 ${nameError ? 'border-crimson-500' : 'border-white/25'}`}>
+									<span className="text-sm font-bold text-white/60">@</span>
+									<input
+										type="text"
+										value={nameDraft}
+										onChange={(e) => { setNameDraft(e.target.value); setNameError(false) }}
+										maxLength={32}
+										placeholder="tu_usuario"
+										aria-label="Tu usuario de Telegram"
+										autoCapitalize="none"
+										autoCorrect="off"
+										spellCheck={false}
+										className="h-full w-40 bg-transparent px-1.5 pr-4 text-sm text-white placeholder-white/40 outline-none"
+									/>
+								</div>
+								<button
+									type="submit"
+									className="inline-flex h-11 items-center justify-center rounded-full bg-malachite-500 px-5 text-sm font-bold text-black hover:scale-105 active:scale-95 transition-transform"
+								>
+									Anotar
+								</button>
+							</div>
+							<p className="max-w-xs text-[11px] text-white/50">
+								{nameError
+									? <span className="text-crimson-600 font-medium">Usuario inválido — 5 a 32 caracteres, letras, números o _</span>
+									: <>🎁 Tu @ de Telegram pa&apos;l ranking — cada semana <strong className="text-white/75">premiamos al #1</strong> y te contactamos por ahí</>}
+							</p>
+						</form>
 					)}
 
 					<div className="flex flex-wrap items-center justify-center gap-3">
