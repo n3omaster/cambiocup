@@ -2,14 +2,11 @@
 
 import Link from 'next/link'
 import { encodePayload } from '@/app/utils/gameCodec'
+import { DX, STEP, buildCourse, initSim, terrainY as simTerrainY, holeAt as simHoleAt, dayAt, applyResize, applyJump, applyOffers, stepPhysics } from '@/app/utils/gameSim'
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 
-// ── Tuning ──────────────────────────────────────────────────────────────────
-const DX = 90               // px between data points (world units)
-const GRAVITY = 2800
-const JUMP_V = 950
-const BASE_SPEED = 250
-const MAX_EXTRA_SPEED = 220
+// La física vive en app/utils/gameSim.js (paso fijo STEP, compartida con el
+// verificador de replays del server); aquí quedan render, audio e inputs.
 const BEST_KEY = 'cambiocup:play:best'
 const NAME_KEY = 'cambiocup:play:name'
 
@@ -18,13 +15,6 @@ const NAME_KEY = 'cambiocup:play:name'
 const normalizeTg = (raw) => {
 	const user = String(raw || '').trim().replace(/^@+/, '')
 	return /^[a-zA-Z][a-zA-Z0-9_]{4,31}$/.test(user) ? `@${user.toLowerCase()}` : null
-}
-
-const mulberry32 = (seed) => () => {
-	seed |= 0; seed = (seed + 0x6D2B79F5) | 0
-	let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-	t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-	return ((t ^ (t >>> 14)) >>> 0) / 4294967296
 }
 
 // Game SFX: real coin recordings (public/sounds/*, CC0 from OpenGameArt) played
@@ -139,80 +129,6 @@ const createAudio = () => {
 	}
 }
 
-// The course is deterministic (fixed seed): every run plays the same map,
-// so learning the CUP's history IS the skill — same idea as the BTC game.
-const buildCourse = (data) => {
-
-	const values = data.map((d) => d.value)
-	const times = data.map((d) => d.time)
-	const n = values.length
-
-	// Normalize each point against a rolling window so the line always stays on screen
-	const WIN = 60
-	const raw = new Array(n)
-	for (let i = 0; i < n; i++) {
-		let min = Infinity, max = -Infinity
-		for (let j = Math.max(0, i - WIN); j <= Math.min(n - 1, i + WIN); j++) {
-			if (values[j] < min) min = values[j]
-			if (values[j] > max) max = values[j]
-		}
-		raw[i] = max - min < 1e-9 ? 0.5 : (values[i] - min) / (max - min)
-	}
-	const heights = raw.map((h, i) => (raw[Math.max(0, i - 1)] + h + raw[Math.min(n - 1, i + 1)]) / 3)
-
-	// Volatility threshold: obstacles come from real moves in the rate
-	const pcts = []
-	for (let i = 1; i < n; i++) pcts.push((values[i] - values[i - 1]) / (values[i - 1] || 1))
-	const mean = pcts.reduce((a, b) => a + b, 0) / (pcts.length || 1)
-	const std = Math.sqrt(pcts.reduce((a, b) => a + (b - mean) ** 2, 0) / (pcts.length || 1)) || 0.001
-
-	const rand = mulberry32(20260724)
-	const spikes = [] // subida fuerte → pico rojo
-	const holes = []  // bajada fuerte → hueco
-	let lastI = 16
-	for (let i = 22; i < n - 4; i++) {
-		const gap = i - lastI
-		if (gap < 6) continue
-		const pct = pcts[i - 1]
-		let type = null
-		if (pct > std * 1.1) type = 'spike'
-		else if (pct < -std * 1.1) type = 'hole'
-		else if (gap >= 14 && rand() < 0.35) type = rand() < 0.45 ? 'spike' : 'hole'
-		if (!type) continue
-		if (type === 'spike') {
-			// Tall enough that a single jump (~161px apex) can't clear them — double jump required (~297px)
-			spikes.push({ i, h: 180 + rand() * 45, w: 50 })
-			lastI = i
-		} else {
-			const wpts = 1.4 + rand() * 0.9
-			holes.push({ x0: i * DX - 20, x1: (i + wpts) * DX })
-			lastI = i + Math.ceil(wpts)
-		}
-	}
-
-	// Coins: arcs over holes, one above each spike, filler along the way
-	const coins = []
-	let id = 0
-	for (const h of holes) {
-		const cx = (h.x0 + h.x1) / 2
-		coins.push({ id: id++, x: cx - 60, dy: 95 }, { id: id++, x: cx, dy: 135 }, { id: id++, x: cx + 60, dy: 95 })
-	}
-	for (const s of spikes) coins.push({ id: id++, x: s.i * DX, dy: s.h + 55 })
-	const nearObstacle = (x) =>
-		spikes.some((s) => Math.abs(s.i * DX - x) < DX * 2) || holes.some((h) => x > h.x0 - DX && x < h.x1 + DX)
-	for (let i = 18; i < n; i += 7) {
-		const x = i * DX
-		if (!nearObstacle(x)) coins.push({ id: id++, x, dy: 65 + rand() * 50 })
-	}
-	coins.sort((a, b) => a.x - b.x)
-
-	const stars = Array.from({ length: 80 }, () => ({
-		x: rand(), y: rand() * 0.85, r: 0.4 + rand() * 1.4, a: 0.15 + rand() * 0.45,
-	}))
-
-	return { values, times, heights, spikes, holes, coins, stars, n }
-}
-
 // Composes the shareable 1080×1080 card: the death frame + stats + CTA, all baked
 // into one PNG so it survives any messaging app intact.
 const buildShareCard = (gameCanvas, stats, sans) => {
@@ -301,9 +217,12 @@ export default function Game() {
 	const [rank, setRank] = useState(null)
 	const submittedRef = useRef(false) // one submission per death
 	const runTokenRef = useRef(null) // signed run token, issued at takeoff (anti-cheat)
+	const revRef = useRef(null) // snapshot id de la historia usada para el course (anti-cheat)
+	const traceRef = useRef(null) // traza del run (saltos/ofertas/resizes por paso) — el server la re-simula
 
 	useEffect(() => {
 		try {
+			// eslint-disable-next-line react-hooks/set-state-in-effect -- sincroniza estado externo (localStorage) al montar
 			setBest(JSON.parse(localStorage.getItem(BEST_KEY)))
 			// Only accept a stored name if it's a valid Telegram handle (older saves may predate the @ format)
 			const savedName = normalizeTg(localStorage.getItem(NAME_KEY))
@@ -321,6 +240,7 @@ export default function Game() {
 		} catch { /* leaderboard is optional decoration */ }
 	}, [])
 
+	// eslint-disable-next-line react-hooks/set-state-in-effect -- setBoard ocurre tras un await, no es síncrono
 	useEffect(() => { fetchBoard() }, [fetchBoard])
 
 	// Load the real CUP history (full series, bucketed server-side)
@@ -337,6 +257,7 @@ export default function Game() {
 				if (cancelled) return
 				if (!json.data || json.data.length < 50) { setStatus('error'); return }
 				courseRef.current = buildCourse(json.data)
+				revRef.current = json.rev ?? null
 				setStatus('ready')
 			} catch (err) {
 				console.error('Error loading game data:', err)
@@ -364,10 +285,14 @@ export default function Game() {
 			.then((res) => res.json())
 			.then((json) => { runTokenRef.current = json.token || null })
 			.catch(() => { /* run still plays; the score just won't rank */ })
-		const { values, times, heights, spikes, coins, stars, n } = courseRef.current
-		const holes = [...courseRef.current.holes] // local copy — live craters must not persist across runs
-		const nominal = values[n - 1] // today's rate: the "valor nominal" live offers compare against
-		const totalDays = Math.max(1, Math.ceil((times[n - 1] - times[0]) / 86400))
+		const course = courseRef.current
+		const { values, times, spikes, coins, stars, n } = course
+
+		// Estado de física (gameSim) + traza del run: cada salto, oferta en vivo y
+		// resize queda registrado con su número de paso para que el server pueda
+		// re-simular el run completo y verificar el score.
+		let state = null
+		let trace = null
 
 		let W = 0, H = 0
 		const resize = () => {
@@ -377,37 +302,23 @@ export default function Game() {
 			canvas.width = Math.round(W * dpr)
 			canvas.height = Math.round(H * dpr)
 			ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+			if (state && !state.dead) { applyResize(state, W, H); trace.resizes.push([state.steps, W, H]) }
 		}
 		resize()
 		window.addEventListener('resize', resize)
 
-		const mod = (i) => ((i % n) + n) % n
-		const terrainY = (wx) => {
-			const fi = wx / DX
-			const i0 = Math.floor(fi)
-			const t = fi - i0
-			const h = heights[mod(i0)] * (1 - t) + heights[mod(i0 + 1)] * t
-			return H * (0.72 - h * 0.34)
-		}
-		const holeAt = (wx) => {
-			for (const h of holes) if (wx > h.x0 && wx < h.x1) return h
-			return null
-		}
+		state = initSim(course, W, H)
+		trace = { w: W, h: H, resizes: [], offers: [], jumps: [] }
 
-		// Run state
-		const R = Math.max(15, Math.min(24, W * 0.027))
-		const PX = W * 0.3
-		let worldX = 0
-		let py = terrainY(PX) - R
-		let vy = 0
-		let grounded = true
-		let jumpsLeft = 2
-		let score = 0
-		let combo = 1
-		let comboTimer = 0
-		let elapsed = 0
-		let dead = false
-		const taken = new Set()
+		const terrainY = (wx) => simTerrainY(state, course, wx)
+		const holeAt = (wx) => simHoleAt(state, wx)
+
+		// Vistas estables sobre el estado de la sim (mutadas en sitio, nunca reasignadas)
+		const holes = state.holes
+		const liveDollars = state.liveDollars
+		const taken = state.taken
+		const R = state.r
+		const PX = state.px
 		const trail = []
 		const popups = []
 		let raf = 0
@@ -416,7 +327,6 @@ export default function Game() {
 		// (/api/offers, 3s poll). Offer ≥ nominal → a dollar falls from the sky;
 		// offer < nominal → a double-jump crater opens in the terrain ahead.
 		const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace'
-		const liveDollars = [] // {x, y, vy, state:'fall'|'ground', groundT, value}
 		const seenOffers = new Set()
 
 		const roundedRect = (c, x, y, w, h, r) => {
@@ -432,61 +342,46 @@ export default function Game() {
 
 		const fmtValue = (v) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+		// El spawn (posiciones incluidas) lo computa gameSim desde el estado, así el
+		// server reproduce lo mismo con solo [paso, id, value] en la traza
 		const fetchOffers = async () => {
 			try {
 				const res = await fetch('/api/offers')
 				const json = await res.json()
-				if (dead || !json.offers?.length) return
-				let dollarStagger = 0
-				let craterStagger = 0
+				if (state.dead || !json.offers?.length) return
+				const batch = []
 				for (const o of json.offers) {
 					if (seenOffers.has(o.id)) continue
 					seenOffers.add(o.id)
-					const value = Number(o.value) || 0
-					const idHash = [...String(o.id)].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
-					if (value >= nominal) {
-						// Pagan por encima: cae un dólar del cielo
-						let x = worldX + W * 0.85 + dollarStagger
-						dollarStagger += 380
-						let guard = 0
-						while (holeAt(x) && guard++ < 20) x += 160
-						liveDollars.push({ x, y: -40, vy: 0, state: 'fall', groundT: 0, value })
-					} else {
-						// Pagan por debajo: cráter que exige doble salto (~235–290px)
-						const wpx = DX * (2.6 + (idHash % 7) / 10)
-						let x0 = worldX + W + 400 + craterStagger
-						craterStagger += 550
-						const isClear = (a, b) =>
-							!spikes.some((s) => s.i * DX > a - 180 && s.i * DX < b + 180) &&
-							!holes.some((h) => h.x1 > a - 220 && h.x0 < b + 220)
-						let guard = 0
-						while (!isClear(x0, x0 + wpx) && guard++ < 30) x0 += 160
-						holes.push({ x0, x1: x0 + wpx, live: { value } })
-					}
+					batch.push({ id: o.id, value: Number(o.value) || 0 })
 				}
+				if (!batch.length) return
+				for (const o of batch) trace.offers.push([state.steps, o.id, o.value])
+				applyOffers(state, course, batch)
 			} catch { /* offline tick — retry on next poll */ }
 		}
 		fetchOffers()
 		const offerPoll = setInterval(fetchOffers, 3000)
 
-		const dayAt = (rawIdx) => {
-			const loops = Math.floor(rawIdx / n)
-			return Math.floor((times[mod(rawIdx)] - times[0]) / 86400) + 1 + loops * totalDays
-		}
+		const mod = (i) => ((i % n) + n) % n
 
+		let finished = false
 		const die = () => {
-			if (dead) return
-			dead = true
+			if (finished) return
+			finished = true
 			audio.death()
 			cancelAnimationFrame(raf)
-			const rawIdx = Math.floor((worldX + PX) / DX)
+			const rawIdx = Math.floor((state.worldX + PX) / DX)
 			const loops = Math.floor(rawIdx / n)
 			const idx = mod(rawIdx)
-			const day = dayAt(rawIdx)
+			const day = dayAt(course, rawIdx)
 			const dateStr = loops > 0
 				? 'un futuro lejano 🚀'
 				: new Date(times[idx] * 1000).toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric' })
-			const stats = { day, dateStr, rate: values[idx].toFixed(2), score: Math.round(score) }
+			const stats = { day, dateStr, rate: values[idx].toFixed(2), score: Math.round(state.score) }
+			// La traza completa del run muerto queda lista para el submit: el server
+			// la re-simula y solo acepta el score si lo reproduce
+			traceRef.current = trace
 			try {
 				const prev = JSON.parse(localStorage.getItem(BEST_KEY))
 				if (!prev || stats.score > prev.score) {
@@ -506,12 +401,12 @@ export default function Game() {
 		}
 
 		const jump = () => {
-			if (dead || jumpsLeft <= 0) return
-			const fromGround = grounded
-			jumpsLeft--
-			vy = -JUMP_V * (fromGround ? 1 : 0.92)
-			grounded = false
-			if (fromGround) audio.jump()
+			// Se aplica justo antes del paso state.steps: la traza guarda ese índice
+			// y el server lo re-aplica en el mismo punto exacto
+			const kind = applyJump(state)
+			if (!kind) return
+			trace.jumps.push(state.steps)
+			if (kind === 'jump') audio.jump()
 			else audio.doubleJump()
 		}
 
@@ -523,85 +418,26 @@ export default function Game() {
 		window.addEventListener('keydown', onKey)
 
 		let lastT = performance.now()
+		let acc = 0
 
 		const frame = (now) => {
-			const dt = Math.min((now - lastT) / 1000, 0.033)
+			const dt = Math.min((now - lastT) / 1000, 0.1) // dt real, solo para el render
 			lastT = now
 
-			// ── Update ──
-			const speed = BASE_SPEED + Math.min(MAX_EXTRA_SPEED, elapsed * 7)
-			worldX += speed * dt
-			elapsed += dt
+			// ── Update: la física corre en gameSim a paso fijo (reproducible) ──
+			acc += dt
+			while (acc >= STEP) {
+				acc -= STEP
+				for (const ev of stepPhysics(state, course)) {
+					if (ev.type === 'coin') {
+						audio.coin(ev.combo)
+						popups.push({ x: PX, y: ev.cy - 20, text: `+${ev.gain} ×${ev.combo}`, t: 0 })
+					} else if (ev.type === 'die') { die(); return }
+				}
+			}
 
+			const { worldX, py, elapsed, score, combo, comboTimer } = state
 			const pwx = worldX + PX
-			const hole = holeAt(pwx)
-			const gy = terrainY(pwx)
-
-			vy = Math.min(vy + GRAVITY * dt, 1700)
-			py += vy * dt
-
-			if (!hole && vy >= 0 && py + R >= gy) {
-				if (py + R > gy + 30 && vy > 150) { die(); return } // fell into the far wall of a hole
-				py = gy - R
-				vy = 0
-				grounded = true
-				jumpsLeft = 2
-			} else {
-				grounded = false
-			}
-			if (py - R > H + 60) { die(); return } // fell through a hole
-
-			for (const s of spikes) {
-				const sx = s.i * DX
-				const dx = Math.abs(pwx - sx)
-				if (dx < s.w / 2) {
-					const baseY = terrainY(sx)
-					// Squared falloff matches the thorn's concave flanks (kinder than the old triangle)
-					const frac = 1 - dx / (s.w / 2)
-					const surfY = baseY - s.h * frac * frac
-					if (py + R * 0.7 > surfY) { die(); return }
-				}
-			}
-
-			comboTimer -= dt
-			if (comboTimer <= 0) combo = 1
-
-			for (const c of coins) {
-				if (c.x < pwx - 200 || c.x > pwx + 200 || taken.has(c.id)) continue
-				const cy = terrainY(c.x) - c.dy + Math.sin(elapsed * 3 + c.id) * 4
-				const dx = pwx - c.x
-				const dyp = py - cy
-				if (dx * dx + dyp * dyp < (R + 12) ** 2) {
-					taken.add(c.id)
-					combo++
-					comboTimer = 4
-					audio.coin(combo)
-					const gain = 25 * combo
-					score += gain
-					popups.push({ x: PX, y: cy - 20, text: `+${gain} ×${combo}`, t: 0 })
-				}
-			}
-
-			// Falling dollars: fall, land, sit as a lethal obstacle for 6s, fade out
-			for (let i = liveDollars.length - 1; i >= 0; i--) {
-				const d = liveDollars[i]
-				if (d.state === 'fall') {
-					d.vy = Math.min(d.vy + 1600 * dt, 900)
-					d.y += d.vy * dt
-					const gy = terrainY(d.x)
-					if (d.y >= gy - 13) { d.y = gy - 13; d.state = 'ground'; d.groundT = 0 }
-				} else {
-					d.groundT += dt
-				}
-				if (d.x < worldX - 250 || d.groundT > 6) { liveDollars.splice(i, 1); continue }
-				const dx = pwx - d.x
-				const dyp = py - d.y
-				if (dx * dx + dyp * dyp < (R + 17) ** 2) { die(); return }
-			}
-			// Live craters already crossed: drop them from the local terrain
-			for (let i = holes.length - 1; i >= 0; i--) {
-				if (holes[i].live && holes[i].x1 < worldX - 400) holes.splice(i, 1)
-			}
 
 			trail.push({ y: py })
 			if (trail.length > 14) trail.shift()
@@ -883,7 +719,7 @@ export default function Game() {
 			ctx.restore()
 
 			// HUD
-			const day = dayAt(Math.floor(pwx / DX))
+			const day = dayAt(course, Math.floor(pwx / DX))
 			const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace'
 			ctx.textAlign = 'left'
 			ctx.textBaseline = 'alphabetic'
@@ -970,13 +806,16 @@ export default function Game() {
 			localStorage.setItem(NAME_KEY, name)
 			setPlayerName(name)
 			const token = runTokenRef.current
-			const payload = { name, score: death.score, day: death.day }
+			// La traza (saltos/ofertas/resizes por paso) + rev del mapa permiten al
+			// server re-simular el run entero: sin una traza que reproduzca el score,
+			// la submission cae al honeypot
+			const payload = { name, score: death.score, day: death.day, rev: revRef.current, run: traceRef.current }
 			const res = await fetch('/api/game-score', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				// Scrambled envelope keyed by the run token; a plain payload (token
 				// fetch failed) still submits but lands in the server's honeypot
-				body: JSON.stringify(token ? { t: token, d: encodePayload(payload, token) } : payload),
+				body: JSON.stringify(token ? { t: token, d: encodePayload(payload, token) } : { name, score: death.score, day: death.day }),
 			})
 			if (res.ok) {
 				const json = await res.json()
@@ -990,6 +829,7 @@ export default function Game() {
 
 	// Known player: submit automatically the moment the death screen appears
 	useEffect(() => {
+		// eslint-disable-next-line react-hooks/set-state-in-effect -- setRank/setBoard ocurren tras un await, no es síncrono
 		if (status === 'dead' && death && playerName) submitScore(playerName)
 	}, [status, death, playerName, submitScore])
 

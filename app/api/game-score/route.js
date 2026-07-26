@@ -1,21 +1,90 @@
 import { NextResponse } from 'next/server'
-import { saveGameScore, getTopScores, countScoresAbove, countGameRuns } from '@/lib/supabase'
+import { saveGameScore, getTopScores, countScoresAbove, countGameRuns, getOffersByIds } from '@/lib/supabase'
 import { verifyToken } from '@/lib/gameToken'
 import { decodePayload } from '@/app/utils/gameCodec'
+import { buildCourse, simulateRun, STEP_HZ } from '@/app/utils/gameSim'
+import { getBucketedHistory } from '@/lib/gameHistory'
 
 // Telegram username: 5-32 chars, letters/digits/underscore, starts with a letter
 const TG_RE = /^[a-zA-Z][a-zA-Z0-9_]{4,31}$/
 const MAX_SCORE = 500000
 const MAX_DAY = 10000
 
-// Plausibility bounds vs the run token's age (the run's real duration):
-// - the engine tops out at ~470 px/s ≈ 5.2 course points/s ≈ 2.5 game-days/s
-//   with today's history span; 6 leaves margin as the history grows
-// - score grows ~quadratically with combo: ≤ ~12.5·(coins/s·t)² ≈ 50·t²
+// Ventana del run token: mínimo para descartar submits instantáneos, máximo
+// corto (antes 6 h) para que no se puedan pre-cosechar tokens y "envejecerlos"
 const MIN_ELAPSED_S = 3
-const MAX_TOKEN_AGE_S = 6 * 3600
-const MAX_DAYS_PER_SEC = 6
-const SCORE_QUAD_PER_SEC = 50
+const MAX_TOKEN_AGE_S = 30 * 60
+
+// Límites del replay: el snapshot del mapa (rev) no puede ser más viejo que el
+// edge-cache + margen, la sim no puede durar más que la vida real del token, y
+// la traza tiene topes de tamaño generosos para runs humanos
+const REV_MAX_AGE_MS = 26 * 3600 * 1000
+const SIM_SLACK_S = 5
+const OFFER_WINDOW_MS = 5 * 60 * 1000
+const MAX_JUMPS = 5000
+const MAX_OFFERS = 300
+const MAX_RESIZES = 200
+const MIN_DIM = 200
+const MAX_DIM = 6000
+
+const isStep = (v) => Number.isInteger(v) && v >= 0
+const isDim = (v) => Number.isFinite(v) && v >= MIN_DIM && v <= MAX_DIM
+
+// Re-simula el run completo con el motor compartido (gameSim) sobre el MISMO
+// mapa que vio el cliente (reconstruido con rev) y los MISMOS eventos en vivo
+// (verificados contra la tabla offers). El score solo es válido si la física
+// lo reproduce exactamente: inyectar un número en el cliente ya no sirve —
+// haría falta una secuencia de saltos que de verdad lo logre, jugando.
+const verifyRun = async (params) => {
+	// Cualquier traza que reviente la sim es trampa malformada: al honeypot, no a un 400
+	try { return await verifyRunInner(params) } catch { return false }
+}
+
+const verifyRunInner = async ({ run, rev, score, day, tok, elapsed }) => {
+
+	if (!run || typeof run !== 'object') return false
+	if (!isDim(run.w) || !isDim(run.h)) return false
+
+	const jumps = Array.isArray(run.jumps) ? run.jumps : null
+	const offers = Array.isArray(run.offers) ? run.offers : null
+	const resizes = Array.isArray(run.resizes) ? run.resizes : null
+	if (!jumps || !offers || !resizes) return false
+	if (jumps.length > MAX_JUMPS || offers.length > MAX_OFFERS || resizes.length > MAX_RESIZES) return false
+	if (!jumps.every(isStep)) return false
+	if (!resizes.every((r) => Array.isArray(r) && r.length === 3 && isStep(r[0]) && isDim(r[1]) && isDim(r[2]))) return false
+	if (!offers.every((o) => Array.isArray(o) && o.length === 3 && isStep(o[0]) && Number.isFinite(o[2]))) return false
+
+	const now = Date.now()
+	if (!Number.isFinite(rev) || rev > now + 60 * 1000 || rev < now - REV_MAX_AGE_MS) return false
+
+	// Las ofertas EN VIVO de la traza deben existir y haber ocurrido durante el run
+	if (offers.length) {
+		const ids = [...new Set(offers.map((o) => o[1]))]
+		const { data: rows, error } = await getOffersByIds(ids)
+		if (error) return false
+		const byId = new Map((rows || []).map((r) => [String(r.id), r]))
+		for (const [, id, value] of offers) {
+			const row = byId.get(String(id))
+			if (!row || (Number(row.value) || 0) !== value) return false
+			const at = new Date(row.created_at).getTime()
+			if (at < tok.t - OFFER_WINDOW_MS || at > now) return false
+		}
+	}
+
+	const { points } = await getBucketedHistory(1, rev) // 1 = CUP, la única moneda del juego
+	if (points.length < 50) return false
+
+	const maxSteps = Math.min(Math.ceil((elapsed + SIM_SLACK_S) * STEP_HZ), MAX_TOKEN_AGE_S * STEP_HZ)
+	const result = simulateRun(buildCourse(points), run, maxSteps)
+
+	return (
+		result.died &&
+		result.score === score &&
+		result.day === day &&
+		result.steps >= MIN_ELAPSED_S * STEP_HZ &&
+		result.steps / STEP_HZ <= elapsed + SIM_SLACK_S
+	)
+}
 
 // GET → leaderboard: top 10 (best score per player) + total runs
 export async function GET() {
@@ -38,10 +107,12 @@ export async function GET() {
 }
 
 // POST → save a run, return the global rank.
-// Real clients send {t: runToken, d: scrambled payload}; anything else — the
-// plain {name, score, day} JSON people curl by hand — is the honeypot: it gets
-// saved with flagged=true (never shown on the leaderboard) and answered with a
-// believable rank so the cheater thinks it worked.
+// Real clients send {t: runToken, d: scrambled payload} where the payload
+// carries the full input trace of the run. Anything else — plain JSON, a valid
+// token whose trace doesn't reproduce the claimed score, offers that never
+// happened — is the honeypot: saved with flagged=true (never shown on the
+// leaderboard) and answered with a believable rank so the cheater thinks it
+// worked and stops digging.
 export async function POST(request) {
 
 	try {
@@ -61,8 +132,9 @@ export async function POST(request) {
 			if (
 				tok &&
 				elapsed >= MIN_ELAPSED_S && elapsed <= MAX_TOKEN_AGE_S &&
-				claimedDay <= elapsed * MAX_DAYS_PER_SEC &&
-				claimedScore <= SCORE_QUAD_PER_SEC * elapsed * elapsed + 5000
+				claimedDay <= elapsed * 6 &&
+				claimedScore <= 50 * elapsed * elapsed + 5000 &&
+				await verifyRun({ run: raw.run, rev: Number(raw.rev), score: claimedScore, day: claimedDay, tok, elapsed })
 			) {
 				flagged = false
 				nonce = tok.n
