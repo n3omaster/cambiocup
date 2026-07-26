@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { encodePayload } from '@/app/utils/gameCodec'
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 
 // ── Tuning ──────────────────────────────────────────────────────────────────
@@ -299,6 +300,7 @@ export default function Game() {
 	const [board, setBoard] = useState(null) // {top: [...], runs}
 	const [rank, setRank] = useState(null)
 	const submittedRef = useRef(false) // one submission per death
+	const runTokenRef = useRef(null) // signed run token, issued at takeoff (anti-cheat)
 
 	useEffect(() => {
 		try {
@@ -354,6 +356,14 @@ export default function Game() {
 		if (!audioRef.current) audioRef.current = createAudio()
 		const audio = audioRef.current
 		audio.preload() // fetch + decode the real coin recordings (no-op after the first run)
+
+		// Anti-cheat: a signed run token is issued at takeoff — its age proves the
+		// run's real duration when the score is submitted
+		runTokenRef.current = null
+		fetch('/api/game-token')
+			.then((res) => res.json())
+			.then((json) => { runTokenRef.current = json.token || null })
+			.catch(() => { /* run still plays; the score just won't rank */ })
 		const { values, times, heights, spikes, coins, stars, n } = courseRef.current
 		const holes = [...courseRef.current.holes] // local copy — live craters must not persist across runs
 		const nominal = values[n - 1] // today's rate: the "valor nominal" live offers compare against
@@ -959,10 +969,14 @@ export default function Game() {
 		try {
 			localStorage.setItem(NAME_KEY, name)
 			setPlayerName(name)
+			const token = runTokenRef.current
+			const payload = { name, score: death.score, day: death.day }
 			const res = await fetch('/api/game-score', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ name, score: death.score, day: death.day }),
+				// Scrambled envelope keyed by the run token; a plain payload (token
+				// fetch failed) still submits but lands in the server's honeypot
+				body: JSON.stringify(token ? { t: token, d: encodePayload(payload, token) } : payload),
 			})
 			if (res.ok) {
 				const json = await res.json()

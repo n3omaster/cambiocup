@@ -51,11 +51,13 @@ app/
     ├── offers/route.js         # GET → recent offers (last 2 minutes)
     ├── history/route.js        # GET ?coin=CUP&days=7 → chart data
     ├── game-history/route.js   # GET ?coin=CUP → full history for the game (parallel pagination + bucketing)
-    ├── game-score/route.js     # GET → leaderboard (top 10 + runs) / POST → save run, returns global rank
+    ├── game-score/route.js     # GET → leaderboard (top 10 + runs) / POST → save run (signed-token verified), returns global rank
+    ├── game-token/route.js     # GET → signed HMAC run token (anti-cheat, issued when a run starts)
     ├── og/route.js             # GET ?coin=CUP → dynamic OG image (1200×630)
     └── webhook/route.js        # POST → save new offer (type, status, value, coin)
 lib/
-└── supabase.js                # Supabase client + all DB operations
+├── supabase.js                # Supabase client + all DB operations
+└── gameToken.js               # Server-only HMAC run tokens for the game (issue/verify)
 colors.js                      # Color palettes (malachite, crimson, delft_blue, ghost_white, yale_blue)
 vercel.ts                      # Vercel config (@vercel/config): cron for /api/cron every 10 min
 ```
@@ -69,7 +71,8 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 | `/api/offers` | GET | — | Returns offers created in last 2 minutes |
 | `/api/history` | GET | `coin`, `days` | Returns `{data: [{time, value}], coin}` — `time` is a unix timestamp in seconds |
 | `/api/game-history` | GET | `coin` | Full history for the `/play` game: counts rows, pages past the 1000-row cap in parallel, buckets to ~2000 averaged points. Edge-cached 1h |
-| `/api/game-score` | GET / POST | POST: `{name, score, day}` | Game leaderboard. GET returns `{top: [best score per player, max 10], runs}`; POST validates and saves a run, returns `{rank}` |
+| `/api/game-score` | GET / POST | POST: `{t, d}` (token + scrambled payload) | Game leaderboard. GET returns `{top: [best score per player, max 10], runs}` (flagged rows excluded); POST verifies the run token (HMAC signature, age vs claimed day/score plausibility, single-use nonce) and saves the run. Plain `{name, score, day}` bodies or implausible runs are the **honeypot**: saved with `flagged=true`, answered with a believable `{rank}`, never shown |
+| `/api/game-token` | GET | — | Issues a signed run token (`base64url({t,n}).hmac`) when a run starts; its age proves the run's real duration at submit time |
 | `/api/og` | GET | `coin` | Generates dynamic Open Graph image with current rate and trend |
 | `/api/webhook` | POST | `{type, status, value, coin}` | Validates and saves a new offer |
 
@@ -83,8 +86,9 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 - `id`, `type` ('buy'|'sell'), `status` ('attempt'|'completed'), `value` (float), `coin` (string), `created_at`
 
 **`game_scores` table** — CUP Runner leaderboard (one row per finished run):
-- `id`, `name` (Telegram handle, normalized `@lowercase`, 6-33 chars), `score` (int), `day` (int), `created_at`
+- `id`, `name` (Telegram handle, normalized `@lowercase`, 6-33 chars), `score` (int), `day` (int), `flagged` (bool, honeypot rows — curl'd/implausible submissions, excluded from all reads), `nonce` (text, run-token nonce; partial unique index makes tokens single-use), `created_at`
 - Index on `score desc`; RLS allows anon insert/select. The Telegram @ is used to contact weekly winners
+- Inspect cheaters with `select name, score, day, created_at from game_scores where flagged order by created_at desc`
 
 Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders newest-first so the cap keeps recent data, then reverses back to chronological order for charts.
 
@@ -121,6 +125,8 @@ Required in `.env`:
 SUPABASE_URL=<supabase-project-url>
 SUPABASE_KEY=<supabase-anon-key>
 ```
+
+Optional: `GAME_SCORE_SECRET` — HMAC secret for game run tokens (falls back to `SUPABASE_KEY`)
 
 ## Common Tasks
 
