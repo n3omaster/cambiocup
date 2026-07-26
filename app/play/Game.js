@@ -892,10 +892,10 @@ export default function Game() {
 					{board?.top?.length > 0 && (
 						<div className="w-full max-w-xs rounded-2xl liquid-glass liquid-glass--dark px-5 py-4 text-left">
 							<p className="mb-2 flex justify-between text-[11px] font-bold tracking-[0.2em] text-white/50">
-								<span>🌍 TOP 5 MUNDIAL</span>
+								<span>🌍 TOP 10 MUNDIAL</span>
 								<span className="tabular-nums">{board.runs.toLocaleString('es')} partidas</span>
 							</p>
-							{board.top.slice(0, 5).map((row, i) => (
+							{board.top.slice(0, 10).map((row, i) => (
 								<div key={`${row.name}-${i}`} className="flex items-center justify-between gap-3 py-0.5 text-sm">
 									<span className={`truncate font-medium ${row.name === playerName ? 'text-malachite-500' : 'text-white/80'}`}>
 										{['🥇', '🥈', '🥉'][i] || `${i + 1}.`} {row.name}
@@ -903,6 +903,9 @@ export default function Game() {
 									<span className="shrink-0 tabular-nums font-bold text-[#ffd75e]">{row.score.toLocaleString('es')}</span>
 								</div>
 							))}
+							<Link href="/play/top-scores" className="mt-2 block text-center text-[11px] font-bold tracking-wide text-white/45 transition-colors hover:text-white/80">
+								Top 10 →
+							</Link>
 						</div>
 					)}
 					<button
