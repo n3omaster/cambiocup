@@ -94,7 +94,12 @@ const buildCourse = (data) => {
 		x: rand(), y: rand() * 0.85, r: 0.4 + rand() * 1.4, a: 0.15 + rand() * 0.45,
 	}))
 
-	return { values, times, heights, spikes, holes, coins, stars, n }
+	// Meta de la pista: el último punto de datos ES el día de hoy. Cruzarlo gana
+	// el run (state.won) — sin esto la pista "después de hoy" era un limbo sin
+	// obstáculos donde el run no podía terminar.
+	const finishX = (n - 1) * DX
+
+	return { values, times, heights, spikes, holes, coins, stars, n, finishX }
 }
 
 // ── Estado de un run ────────────────────────────────────────────────────────
@@ -114,6 +119,7 @@ const createSim = (course, w, h) => ({
 	comboTimer: 0,
 	elapsed: 0,
 	dead: false,
+	won: false,
 	steps: 0,
 	taken: new Set(),
 	holes: [...course.holes], // copia local — los cráteres vivos no persisten entre runs
@@ -168,7 +174,7 @@ const applyResize = (state, w, h) => { state.w = w; state.h = h }
 // Devuelve 'jump' | 'double' si el salto se aplicó (para el audio del cliente),
 // o null si se ignoró — solo los aplicados van a la traza.
 const applyJump = (state) => {
-	if (state.dead || state.jumpsLeft <= 0) return null
+	if (state.dead || state.won || state.jumpsLeft <= 0) return null
 	const fromGround = state.grounded
 	state.jumpsLeft--
 	state.vy = -JUMP_V * (fromGround ? 1 : 0.92)
@@ -217,7 +223,7 @@ const applyOffers = (state, course, offers) => {
 const stepPhysics = (state, course) => {
 
 	const events = []
-	if (state.dead) return events
+	if (state.dead || state.won) return events
 	const dt = STEP
 	const { coins, spikes } = course
 	const R = state.r
@@ -228,6 +234,15 @@ const stepPhysics = (state, course) => {
 	state.steps++
 
 	const pwx = state.worldX + state.px
+
+	// Meta: cruzar el último punto de la historia (hoy) termina el run ganando.
+	// El chequeo va ANTES de gravedad/colisiones para que el orden sea idéntico
+	// en cliente y verificador.
+	if (pwx >= course.finishX) {
+		state.won = true
+		events.push({ type: 'win' })
+		return events
+	}
 	const hole = holeAt(state, pwx)
 	const gy = terrainY(state, course, pwx)
 
@@ -318,7 +333,7 @@ const simulateRun = (course, trace, maxSteps) => {
 	const jumps = trace.jumps || []
 	const state = initSim(course, w, h)
 	let ri = 0, oi = 0, ji = 0
-	for (let s = 0; s < maxSteps && !state.dead; s++) {
+	for (let s = 0; s < maxSteps && !state.dead && !state.won; s++) {
 		while (ri < resizes.length && resizes[ri][0] === s) { applyResize(state, resizes[ri][1], resizes[ri][2]); ri++ }
 		if (oi < offers.length && offers[oi][0] === s) {
 			const batch = []
@@ -328,7 +343,7 @@ const simulateRun = (course, trace, maxSteps) => {
 		while (ji < jumps.length && jumps[ji] === s) { applyJump(state); ji++ }
 		stepPhysics(state, course)
 	}
-	return { died: state.dead, ...runStats(state, course) }
+	return { died: state.dead, won: state.won, ...runStats(state, course) }
 }
 
 export {

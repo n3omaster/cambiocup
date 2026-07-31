@@ -77,8 +77,10 @@ const verifyRunInner = async ({ run, rev, score, day, tok, elapsed }) => {
 	const maxSteps = Math.min(Math.ceil((elapsed + SIM_SLACK_S) * STEP_HZ), MAX_TOKEN_AGE_S * STEP_HZ)
 	const result = simulateRun(buildCourse(points), run, maxSteps)
 
+	// El run termina muriendo O cruzando la meta (la bandera de "hoy") — ambos
+	// finales los reproduce la sim; un run que no terminó no puntúa
 	return (
-		result.died &&
+		(result.died || result.won) &&
 		result.score === score &&
 		result.day === day &&
 		result.steps >= MIN_ELAPSED_S * STEP_HZ &&

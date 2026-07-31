@@ -240,6 +240,21 @@ main {
 	animation: card-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
+/* Confetti rain (CUP Runner victory screen) — each piece sets its own duration/delay inline */
+@keyframes confetti-fall {
+	0% {
+		translate: 0 -10vh;
+		rotate: 0deg;
+		opacity: 1;
+	}
+
+	100% {
+		translate: 0 115vh;
+		rotate: 720deg;
+		opacity: 0.85;
+	}
+}
+
 /* Floating offers animation */
 @keyframes float-up {
 	0% {

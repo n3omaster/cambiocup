@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { encodePayload } from '@/app/utils/gameCodec'
-import { DX, STEP, buildCourse, initSim, terrainY as simTerrainY, holeAt as simHoleAt, dayAt, applyResize, applyJump, applyOffers, stepPhysics } from '@/app/utils/gameSim'
+import { DX, STEP, mulberry32, buildCourse, initSim, terrainY as simTerrainY, holeAt as simHoleAt, dayAt, applyResize, applyJump, applyOffers, stepPhysics } from '@/app/utils/gameSim'
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 
 // La física vive en app/utils/gameSim.js (paso fijo STEP, compartida con el
@@ -126,6 +126,12 @@ const createAudio = () => {
 				crash({})
 			}
 		},
+		// Victory fanfare: ascending C-major arpeggio (crossing today's flag)
+		win: () => {
+			const notes = [523, 659, 784, 1047]
+			notes.forEach((f, i) => blip({ from: f, to: f * 1.01, dur: 0.16, type: 'square', vol: 0.12, delay: i * 0.13 }))
+			blip({ from: 1047, to: 1568, dur: 0.35, type: 'sine', vol: 0.1, delay: notes.length * 0.13 })
+		},
 	}
 }
 
@@ -175,16 +181,21 @@ const buildShareCard = (gameCanvas, stats, sans) => {
 	ctx.fillStyle = 'rgba(255,255,255,0.55)'
 	ctx.fillText('cambiocup.com/play', 58, 152)
 
-	// Stats
+	// Stats (dead: 💀 caíste / won: 🏁 llegaste hasta hoy)
 	ctx.textAlign = 'center'
 	ctx.font = '104px sans-serif'
-	ctx.fillText('💀', S / 2, S * 0.565)
-	ctx.font = `800 80px ${sans}`
-	ctx.fillStyle = '#ffffff'
-	ctx.fillText(`CAÍSTE EN EL DÍA ${stats.day}`, S / 2, S * 0.67)
+	ctx.fillText(stats.won ? '🏁' : '💀', S / 2, S * 0.565)
+	ctx.font = `800 ${stats.won ? 72 : 80}px ${sans}`
+	ctx.fillStyle = stats.won ? '#53dd6c' : '#ffffff'
+	ctx.fillText(stats.won ? '¡LLEGUÉ HASTA HOY!' : `CAÍSTE EN EL DÍA ${stats.day}`, S / 2, S * 0.67)
 	ctx.font = `500 36px ${sans}`
 	ctx.fillStyle = 'rgba(255,255,255,0.75)'
-	ctx.fillText(`${stats.dateStr} — el CUP estaba en $${stats.rate}`, S / 2, S * 0.725)
+	ctx.fillText(
+		stats.won
+			? `${stats.day} días de historia — hoy el CUP está en $${stats.rate}`
+			: `${stats.dateStr} — el CUP estaba en $${stats.rate}`,
+		S / 2, S * 0.725,
+	)
 	ctx.font = `800 60px ${mono}`
 	ctx.fillStyle = '#ffd75e'
 	ctx.fillText(`${stats.score.toLocaleString('es')} CUP`, S / 2, S * 0.805)
@@ -198,6 +209,45 @@ const buildShareCard = (gameCanvas, stats, sans) => {
 	ctx.fillText('▶ juega en cambiocup.com/play', S / 2, S * 0.945)
 
 	return card
+}
+
+// Full-screen confetti rain for the victory screen. Pure DOM/CSS decoration
+// (fuera de la sim); usa el PRNG determinista de gameSim para pasar la regla de
+// pureza de render — la variedad visual no necesita entropía real.
+const CONFETTI_COLORS = ['#53dd6c', '#ffd75e', '#e05265', '#ffffff', '#229ED9']
+
+function Confetti() {
+	const pieces = useMemo(() => {
+		const rand = mulberry32(0xC0FFE77)
+		return Array.from({ length: 90 }, (_, i) => ({
+			left: rand() * 100,
+			delay: rand() * 2.5,
+			dur: 3 + rand() * 2.5,
+			size: 6 + rand() * 7,
+			color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+			tilt: rand() * 360,
+			round: rand() < 0.3,
+		}))
+	}, [])
+	return (
+		<div className="pointer-events-none fixed inset-0 z-20 overflow-hidden" aria-hidden="true">
+			{pieces.map((p, i) => (
+				<span
+					key={i}
+					className="absolute top-[-3vh] block"
+					style={{
+						left: `${p.left}%`,
+						width: p.size,
+						height: p.size * (p.round ? 1 : 0.55),
+						backgroundColor: p.color,
+						borderRadius: p.round ? '50%' : 2,
+						transform: `rotate(${p.tilt}deg)`,
+						animation: `confetti-fall ${p.dur}s linear ${p.delay}s infinite`,
+					}}
+				/>
+			))}
+		</div>
+	)
 }
 
 export default function Game() {
@@ -217,6 +267,7 @@ export default function Game() {
 	const [rank, setRank] = useState(null)
 	const submittedRef = useRef(false) // one submission per death
 	const runTokenRef = useRef(null) // signed run token, issued at takeoff (anti-cheat)
+	const runTokenPromiseRef = useRef(null) // in-flight token fetch — awaited at submit so fast deaths don't race it
 	const revRef = useRef(null) // snapshot id de la historia usada para el course (anti-cheat)
 	const traceRef = useRef(null) // traza del run (saltos/ofertas/resizes por paso) — el server la re-simula
 
@@ -281,12 +332,12 @@ export default function Game() {
 		// Anti-cheat: a signed run token is issued at takeoff — its age proves the
 		// run's real duration when the score is submitted
 		runTokenRef.current = null
-		fetch('/api/game-token')
+		runTokenPromiseRef.current = fetch('/api/game-token')
 			.then((res) => res.json())
-			.then((json) => { runTokenRef.current = json.token || null })
-			.catch(() => { /* run still plays; the score just won't rank */ })
+			.then((json) => { runTokenRef.current = json.token || null; return runTokenRef.current })
+			.catch(() => null) // run still plays; the score just won't rank
 		const course = courseRef.current
-		const { values, times, spikes, coins, stars, n } = course
+		const { values, times, spikes, coins, stars, n, finishX } = course
 
 		// Estado de física (gameSim) + traza del run: cada salto, oferta en vivo y
 		// resize queda registrado con su número de paso para que el server pueda
@@ -366,19 +417,20 @@ export default function Game() {
 		const mod = (i) => ((i % n) + n) % n
 
 		let finished = false
-		const die = () => {
+		const endRun = (won) => {
 			if (finished) return
 			finished = true
-			audio.death()
+			if (won) audio.win()
+			else audio.death()
 			cancelAnimationFrame(raf)
 			const rawIdx = Math.floor((state.worldX + PX) / DX)
 			const loops = Math.floor(rawIdx / n)
-			const idx = mod(rawIdx)
-			const day = dayAt(course, rawIdx)
-			const dateStr = loops > 0
+			const idx = won ? n - 1 : mod(rawIdx)
+			const day = dayAt(course, won ? n - 1 : rawIdx)
+			const dateStr = loops > 0 && !won
 				? 'un futuro lejano 🚀'
 				: new Date(times[idx] * 1000).toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric' })
-			const stats = { day, dateStr, rate: values[idx].toFixed(2), score: Math.round(state.score) }
+			const stats = { day, dateStr, rate: values[idx].toFixed(2), score: Math.round(state.score), won }
 			// La traza completa del run muerto queda lista para el submit: el server
 			// la re-simula y solo acepta el score si lo reproduce
 			traceRef.current = trace
@@ -432,7 +484,8 @@ export default function Game() {
 					if (ev.type === 'coin') {
 						audio.coin(ev.combo)
 						popups.push({ x: PX, y: ev.cy - 20, text: `+${ev.gain} ×${ev.combo}`, t: 0 })
-					} else if (ev.type === 'die') { die(); return }
+					} else if (ev.type === 'die') { endRun(false); return }
+					else if (ev.type === 'win') { endRun(true); return }
 				}
 			}
 
@@ -581,6 +634,66 @@ export default function Game() {
 				ctx.beginPath()
 				ctx.arc(px, peakY, emberR, 0, Math.PI * 2)
 				ctx.fill()
+			}
+
+			// Meta de "HOY": bandera con asta en el último punto de la historia.
+			// Solo decoración — el cruce lo detecta gameSim (evento 'win').
+			{
+				const fsx = finishX - worldX
+				if (fsx > -120 && fsx < W + 120) {
+					const baseY = terrainY(finishX)
+					const poleH = Math.min(150, H * 0.28)
+					const topY = baseY - poleH
+					// Halo en la base, como un checkpoint que respira
+					const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4)
+					ctx.globalAlpha = 0.35 + pulse * 0.3
+					ctx.strokeStyle = '#ffd75e'
+					ctx.lineWidth = 2
+					ctx.beginPath()
+					ctx.ellipse(fsx, baseY, 26 + pulse * 6, 8, 0, 0, Math.PI * 2)
+					ctx.stroke()
+					ctx.globalAlpha = 1
+					// Asta
+					ctx.strokeStyle = '#f5efe0'
+					ctx.lineWidth = 3.5
+					ctx.shadowColor = 'rgba(255, 215, 94, 0.8)'
+					ctx.shadowBlur = 10
+					ctx.beginPath()
+					ctx.moveTo(fsx, baseY)
+					ctx.lineTo(fsx, topY)
+					ctx.stroke()
+					ctx.shadowBlur = 0
+					ctx.fillStyle = '#ffd75e'
+					ctx.beginPath()
+					ctx.arc(fsx, topY, 4.5, 0, Math.PI * 2)
+					ctx.fill()
+					// Bandera ondeando (tiras verticales con desfase sinusoidal)
+					const fw = 74
+					const fh = 44
+					ctx.fillStyle = '#53dd6c'
+					ctx.shadowColor = '#53dd6c'
+					ctx.shadowBlur = 14
+					ctx.beginPath()
+					ctx.moveTo(fsx + 2, topY + 3)
+					const STRIPS = 12
+					for (let k = 0; k <= STRIPS; k++) {
+						const t = k / STRIPS
+						ctx.lineTo(fsx + 2 + t * fw, topY + 3 + Math.sin(elapsed * 6 - t * 4) * 5 * t)
+					}
+					for (let k = STRIPS; k >= 0; k--) {
+						const t = k / STRIPS
+						ctx.lineTo(fsx + 2 + t * fw, topY + 3 + fh + Math.sin(elapsed * 6 - t * 4) * 5 * t)
+					}
+					ctx.closePath()
+					ctx.fill()
+					ctx.shadowBlur = 0
+					ctx.fillStyle = '#04240b'
+					ctx.font = `800 17px ${MONO}`
+					ctx.textAlign = 'center'
+					ctx.textBaseline = 'middle'
+					ctx.fillText('HOY', fsx + 2 + fw / 2, topY + 3 + fh / 2 + Math.sin(elapsed * 6 - 2) * 2.5)
+					ctx.textBaseline = 'alphabetic'
+				}
 			}
 
 			// Coins
@@ -767,16 +880,27 @@ export default function Game() {
 					? "Me alcanza pa' un cartón de huevos 🥚"
 					: 'Eso ya es plata seria, asere 😎💵'
 	const shareText = death
-		? [
-			'💀 ¡ME MATÓ LA TASA, ASERE!',
-			'',
-			`🪙 Sobreviví ${death.day} días surfeando el precio REAL del CUP`,
-			`📅 Caí el ${death.dateStr} con el dólar a $${death.rate}`,
-			'',
-			`💰 Botín: ${death.score.toLocaleString('es')} CUP — ${flavor}`,
-			'',
-			'¿Puedes superarme? 🎮👇',
-		].join('\n')
+		? death.won
+			? [
+				'🏁 ¡SOBREVIVÍ A TODA LA HISTORIA DEL CUP, ASERE!',
+				'',
+				`🪙 Surfeé los ${death.day} días del precio REAL del dólar en Cuba y llegué a HOY`,
+				`📅 Hoy el CUP está en $${death.rate}`,
+				'',
+				`💰 Botín: ${death.score.toLocaleString('es')} CUP — ${flavor}`,
+				'',
+				'¿Puedes llegar a la meta tú también? 🎮👇',
+			].join('\n')
+			: [
+				'💀 ¡ME MATÓ LA TASA, ASERE!',
+				'',
+				`🪙 Sobreviví ${death.day} días surfeando el precio REAL del CUP`,
+				`📅 Caí el ${death.dateStr} con el dólar a $${death.rate}`,
+				'',
+				`💰 Botín: ${death.score.toLocaleString('es')} CUP — ${flavor}`,
+				'',
+				'¿Puedes superarme? 🎮👇',
+			].join('\n')
 		: ''
 
 	// True on iOS/Android (and some desktops): native sheet can share the PNG itself
@@ -805,7 +929,9 @@ export default function Game() {
 		try {
 			localStorage.setItem(NAME_KEY, name)
 			setPlayerName(name)
-			const token = runTokenRef.current
+			// Espera el fetch del token si sigue en vuelo (una muerte a los ~3s podía
+			// ganarle la carrera y caer al honeypot con un submit sin token)
+			const token = runTokenRef.current || (runTokenPromiseRef.current ? await runTokenPromiseRef.current : null)
 			// La traza (saltos/ofertas/resizes por paso) + rev del mapa permiten al
 			// server re-simular el run entero: sin una traza que reproduzca el score,
 			// la submission cae al honeypot
@@ -877,6 +1003,7 @@ export default function Game() {
 						Toca para saltar y toca de nuevo en el aire para el <strong className="text-white">doble salto</strong>.
 						Los <span className="text-crimson-500 font-bold">picos rojos</span> de las subidas solo se pasan con
 						doble salto; los <strong>huecos</strong> de las caídas, calcula bien la distancia.
+						Sobrevive hasta la <strong className="text-malachite-500">bandera de HOY 🏁</strong> y ganas.
 					</p>
 					<p className="max-w-md text-xs sm:text-sm text-white/50">
 						💸 Las ofertas <strong className="text-white/80">reales</strong> del mercado P2P entran
@@ -922,13 +1049,23 @@ export default function Game() {
 			{status === 'dead' && death && (
 				<div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 overflow-y-auto bg-black/60 p-6 text-center backdrop-blur-sm">
 
-					{/* Captured death frame, photo-style */}
+					{death.won && <Confetti />}
+
+					{death.won && (
+						<h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-malachite-500">
+							🏁 ¡GANASTE! Surfeaste TODA la historia del CUP
+						</h2>
+					)}
+
+					{/* Captured final frame, photo-style */}
 					{share ? (
 						<div className="animate-card-pop">
 							{/* eslint-disable-next-line @next/next/no-img-element */}
 							<img
 								src={share.url}
-								alt={`Caíste en el día ${death.day} — ${death.score.toLocaleString('es')} CUP`}
+								alt={death.won
+									? `¡Llegaste hasta hoy! ${death.day} días — ${death.score.toLocaleString('es')} CUP`
+									: `Caíste en el día ${death.day} — ${death.score.toLocaleString('es')} CUP`}
 								className="w-[min(70vw,360px)] rounded-2xl ring-4 ring-white/90 shadow-[0_25px_80px_rgba(0,0,0,0.65)]"
 							/>
 						</div>
