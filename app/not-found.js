@@ -88,7 +88,7 @@ export default function NotFound() {
 			</div>
 
 			<footer className="absolute bottom-4 sm:bottom-8 z-10 text-xs sm:text-sm text-white/60 text-center px-4">
-				Cambio CUP - Un servicio gratuito de <a href="https://qvapay.com" className="underline hover:text-white transition-colors">QvaPay</a>
+				Cambio CUP - Un servicio de <a href="https://www.qvapay.com" target="_blank" rel="noopener noreferrer" className="underline hover:text-white transition-colors">QvaPay</a>
 			</footer>
 		</main>
 	)

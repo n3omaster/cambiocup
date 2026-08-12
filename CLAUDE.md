@@ -12,7 +12,7 @@ CambioCUP is a real-time Cuban currency exchange rate tracker displaying live ra
 npm run dev      # Development server (Turbopack is default in Next.js 16)
 npm run build    # Production build
 npm run start    # Start production server
-npm run lint     # ESLint flat config (v9) with nextVitals — pinned to v9 because eslint-config-next@16.2 ships APIs incompatible with v10
+npm run lint     # ESLint flat config (v9) with nextVitals — pinned to v9 because eslint-config-next (checked up to 16.3) ships APIs incompatible with v10 (`scopeManager.addGlobals is not a function`)
 ```
 
 There are no tests in this project.

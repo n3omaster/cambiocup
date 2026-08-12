@@ -239,7 +239,7 @@ function HomeContent() {
 							</svg>
 						</a>
 					</div>
-					<div className='text-center sm:text-right'><p>Cambio CUP - Un servicio gratuito de <a href='https://qvapay.com' className='underline hover:text-white transition-colors'>QvaPay</a></p></div>
+					<div className='text-center sm:text-right'><p>Cambio CUP - Un servicio de <a href='https://www.qvapay.com' target='_blank' rel='noopener noreferrer' className='underline hover:text-white transition-colors'>QvaPay</a></p></div>
 				</footer>
 			</main>
 
