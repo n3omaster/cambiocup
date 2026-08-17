@@ -16,6 +16,7 @@ import { randomize, averageData } from './utils/helpers'
 // Config
 const COIN_CONFIG = {
 	CUP: { historyKey: 'cupHistory', decimals: 2, deep: 0.5 },
+	CASH: { historyKey: 'cupcashHistory', decimals: 2, deep: 0.5 },
 	MLC: { historyKey: 'mlcHistory', decimals: 3, deep: 0.009 },
 	CLASICA: { historyKey: 'clasicaHistory', decimals: 3, deep: 0.005 },
 	ETECSA: { historyKey: 'etecsaHistory', decimals: 2, deep: 0.5 },
@@ -56,6 +57,7 @@ function HomeContent() {
 	const [coin, setCoin] = useState('CUP')
 	const [value, setValue] = useState(0)
 	const [trendPct, setTrendPct] = useState(null)
+	const [noData, setNoData] = useState(false)
 	const [bgColor, setBgColor] = useState('bg-crimson')
 	const [showModal, setShowModal] = useState(false)
 	const [copied, setCopied] = useState(false)
@@ -85,13 +87,22 @@ function HomeContent() {
 				const data = await response.json()
 
 				const history = data[config.historyKey]
-				if (!history?.length) return
+				if (!history?.length) {
+					// Coin without market data yet (e.g. CASH until QvaPay records cash trades) —
+					// reset so the previous coin's value doesn't linger on screen
+					setValue(0)
+					setTrendPct(null)
+					setNoData(true)
+					setBgColor('bg-delft_blue')
+					return
+				}
 
 				const { first, average } = averageData(history)
 				const number = Number.parseFloat(randomize(first.value, config.deep))
 
 				setValue(number)
 				setTrendPct(average ? ((number - average) / average) * 100 : null)
+				setNoData(false)
 				setBgColor(number < average ? 'bg-malachite' : number > average ? 'bg-crimson' : 'bg-delft_blue')
 
 			} catch (err) { console.error('Error fetching rates:', err) }
@@ -184,6 +195,7 @@ function HomeContent() {
 									type="button"
 									onClick={(e) => {
 										setCoin(name)
+										setNoData(false) // clear the previous coin's "sin datos" chip until the new fetch resolves
 										e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
 									}}
 									aria-pressed={coin === name}
@@ -214,6 +226,11 @@ function HomeContent() {
 						{config.unit && (
 							<span className="rounded-full liquid-glass px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90">
 								{config.unit}
+							</span>
+						)}
+						{noData && (
+							<span className="rounded-full liquid-glass px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90">
+								Sin datos de mercado todavía
 							</span>
 						)}
 						{trendPct !== null && (

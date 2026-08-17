@@ -8,6 +8,7 @@ export const revalidate = 0
 // Coin configuration
 const COINS = {
 	CUP: { name: 'CUP', decimals: 2, coinId: 'cupHistory' },
+	CASH: { name: 'CASH', decimals: 2, coinId: 'cupcashHistory' },
 	MLC: { name: 'MLC', decimals: 3, coinId: 'mlcHistory' },
 	CLASICA: { name: 'CLASICA', decimals: 3, coinId: 'clasicaHistory' },
 	ETECSA: { name: 'ETECSA', decimals: 2, coinId: 'etecsaHistory' },

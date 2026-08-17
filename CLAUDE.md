@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CambioCUP is a real-time Cuban currency exchange rate tracker displaying live rates for CUP, MLC, CLASICA, ETECSA, and TROPICAL (BANDECPREPAGO) against USD, plus GAS (gasoline price per litre, fixed at 3.50 USD). Market rates are sourced from the QvaPay P2P API (`api.qvapay.com`), stored in Supabase, and rendered with dynamic color indicators showing price trends. Production URL: `https://www.cambiocup.com`
+CambioCUP is a real-time Cuban currency exchange rate tracker displaying live rates for CUP, MLC, CLASICA, ETECSA, TROPICAL (BANDECPREPAGO), and CASH (CUPCASH, CUP en efectivo) against USD, plus GAS (gasoline price per litre, fixed at 3.50 USD). Market rates are sourced from the QvaPay P2P API (`api.qvapay.com`), stored in Supabase, and rendered with dynamic color indicators showing price trends. Production URL: `https://www.cambiocup.com`
 
 ## Commands
 
@@ -22,7 +22,7 @@ There are no tests in this project.
 **Tech Stack**: Next.js 16.2 (App Router), React 19.2, Tailwind CSS 4.3 (via `@tailwindcss/postcss`), Supabase JS v2, NumberFlow (animated numbers), Liveline (live chart), OneSignal (push notifications)
 
 **Data Flow**:
-1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (5 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
+1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` — CUPCASH until cash trades exist) are skipped, not saved. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
 2. **Serve**: `/api` → Returns last 6 entries per coin from database
 3. **Display**: Frontend polls `/api` every 4s → `averageData()` splits first value vs rest average → `randomize()` adds micro-fluctuation → color set by current vs average comparison
 4. **Offers**: `/api/webhook` receives buy/sell offers → `/api/offers` serves recent ones → `FloatingOffers` renders animated bubbles. The same feed also drives live difficulty events in the game
@@ -75,7 +75,7 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 | Endpoint | Method | Params | Description |
 |---|---|---|---|
 | `/api` | GET | — | Returns `{cupHistory, mlcHistory, clasicaHistory, etecsaHistory, bandecprepagoHistory, gasHistory}` (6 entries each) |
-| `/api/cron` | GET | — | Fetches 5 coins from QvaPay, saves averages + fixed GAS price to DB |
+| `/api/cron` | GET | — | Fetches 6 coins from QvaPay, saves averages + fixed GAS price to DB (coins answering no data are skipped) |
 | `/api/offers` | GET | — | Returns offers created in last 2 minutes |
 | `/api/history` | GET | `coin`, `days` | Returns `{data: [{time, value}], coin}` — `time` is a unix timestamp in seconds |
 | `/api/game-history` | GET | `coin` | Full history for `/play` via `lib/gameHistory.js`. Returns `{data, coin, rev}` — `rev` identifies the exact snapshot so the server can rebuild the same map at verify time. Edge-cached 1h |
@@ -101,7 +101,7 @@ The game's score submission is verified by **deterministic re-simulation**, not 
 
 **`exchange` table** — Historical exchange rates (append-only, `updated_at` monotonic):
 - `id`, `coin_id` (int), `value` (float), `updated_at`, `created_at`
-- Coin IDs: 1=CUP, 2=MLC, 3=CLASICA, 4=ETECSA, 5=BANDECPREPAGO(TROPICAL), 6=GAS (fixed 3.50 USD/litre, not fetched from QvaPay — constant `GAS_PRICE` in `api/cron/route.js`)
+- Coin IDs: 1=CUP, 2=MLC, 3=CLASICA, 4=ETECSA, 5=BANDECPREPAGO(TROPICAL), 6=GAS (fixed 3.50 USD/litre, not fetched from QvaPay — constant `GAS_PRICE` in `api/cron/route.js`), 7=CASH (QvaPay `CUPCASH`, CUP en efectivo — the coin exists on QvaPay with P2P enabled but has no completed pairs yet, so its history stays empty until cash trades happen; the frontend shows a "Sin datos de mercado todavía" chip)
 
 **`offers` table** — Buy/sell transaction records:
 - `id`, `type` ('buy'|'sell'), `status` ('attempt'|'completed'), `value` (float), `coin` (string), `created_at`
@@ -127,7 +127,7 @@ Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders ne
 - **JavaScript only** — no TypeScript in this project (except `vercel.ts`, required by `@vercel/config`)
 - **Path alias**: `@/*` maps to project root (jsconfig.json)
 - **Client components**: All interactive files use `"use client"` directive
-- **Per-coin config**: `COIN_CONFIG` in `page.js` maps each coin to `{historyKey, decimals, deep}` — decimals: CUP/ETECSA/TROPICAL/GAS = 2, MLC/CLASICA = 3; randomize span (`deep`): CUP/ETECSA/TROPICAL/GAS = 0.5, MLC = 0.009, CLASICA = 0.005. GAS is stored as a fixed 3.50 but gets the same `deep` jitter as the rest so it reads like live data; it also sets `unit: 'USD por litro'` (rendered as a chip under the price)
+- **Per-coin config**: `COIN_CONFIG` in `page.js` maps each coin to `{historyKey, decimals, deep}` — decimals: CUP/CASH/ETECSA/TROPICAL/GAS = 2, MLC/CLASICA = 3; randomize span (`deep`): CUP/CASH/ETECSA/TROPICAL/GAS = 0.5, MLC = 0.009, CLASICA = 0.005. GAS is stored as a fixed 3.50 but gets the same `deep` jitter as the rest so it reads like live data; it also sets `unit: 'USD por litro'` (rendered as a chip under the price)
 - **Color logic**: `current < average` → green (malachite/bg-malachite) = price is low; `current > average` → red (crimson/bg-crimson) = price is high; exact tie → neutral (bg-delft_blue). Same three-way logic in `/api/og`. Transition is 0.5s ease on `<main>`
 - **Tailwind v4 theme**: Custom colors defined in `globals.css` under `@theme` block (not tailwind.config.js). `--color-*: initial` wipes Tailwind's default palette, so any default token the app uses must be re-declared there
 - **Liquid Glass UI**: `.liquid-glass` (+ `--dark/--emerald/--red` variants) in `globals.css`, driven by an SVG displacement-map `backdrop-filter` defined in `page.js` (`GlassLensFilter`); edges sample inward to avoid Chrome edge-clamp streaks
