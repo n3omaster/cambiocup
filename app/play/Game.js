@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { encodePayload } from '@/app/utils/gameCodec'
-import { DX, STEP, mulberry32, buildCourse, initSim, terrainY as simTerrainY, holeAt as simHoleAt, dayAt, applyResize, applyJump, applyOffers, stepPhysics } from '@/app/utils/gameSim'
+import { DX, STEP, MAGNET_RADIUS, mulberry32, buildCourse, initSim, terrainY as simTerrainY, holeAt as simHoleAt, dayAt, applyResize, applyJump, applyOffers, stepPhysics } from '@/app/utils/gameSim'
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 
 // La física vive en app/utils/gameSim.js (paso fijo STEP, compartida con el
@@ -126,6 +126,42 @@ const createAudio = () => {
 				crash({})
 			}
 		},
+		// Una firma sonora por dinámica del feed P2P, para reconocerla sin leer
+		event: (fx) => {
+			switch (fx) {
+				case 'magnet': // barrido ascendente, como un imán cargando
+					blip({ from: 300, to: 1200, dur: 0.28, type: 'sine', vol: 0.11 })
+					break
+				case 'shield': // dos notas limpias, campana protectora
+					blip({ from: 700, to: 705, dur: 0.14, type: 'triangle', vol: 0.11 })
+					blip({ from: 1050, to: 1055, dur: 0.22, type: 'triangle', vol: 0.09, delay: 0.1 })
+					break
+				case 'blackout': // la señal cayéndose
+					blip({ from: 900, to: 90, dur: 0.45, type: 'sawtooth', vol: 0.1 })
+					break
+				case 'turbo': // ráfaga
+					blip({ from: 420, to: 1500, dur: 0.18, type: 'square', vol: 0.1 })
+					blip({ from: 620, to: 1800, dur: 0.16, type: 'square', vol: 0.07, delay: 0.07 })
+					break
+				case 'lowgrav': // flotar
+					blip({ from: 520, to: 260, dur: 0.4, type: 'sine', vol: 0.1 })
+					break
+				case 'cash': // arpegio de billetes
+					[784, 988, 1175, 1568].forEach((f, i) => blip({ from: f, to: f * 1.01, dur: 0.1, type: 'sine', vol: 0.09, delay: i * 0.06 }))
+					break
+				case 'crater':
+					blip({ from: 220, to: 60, dur: 0.3, type: 'sawtooth', vol: 0.12 })
+					break
+				default: // dollar
+					blip({ from: 1100, to: 400, dur: 0.22, type: 'triangle', vol: 0.1 })
+			}
+		},
+		// Escudo consumido: golpe seco + repique de rescate
+		shieldSave: () => {
+			blip({ from: 180, to: 90, dur: 0.18, type: 'sawtooth', vol: 0.16 })
+			blip({ from: 900, to: 1400, dur: 0.22, type: 'triangle', vol: 0.12, delay: 0.06 })
+		},
+		bonus: () => blip({ from: 1200, to: 1900, dur: 0.11, type: 'sine', vol: 0.11 }),
 		// Victory fanfare: ascending C-major arpeggio (crossing today's flag)
 		win: () => {
 			const notes = [523, 659, 784, 1047]
@@ -216,6 +252,18 @@ const buildShareCard = (gameCanvas, stats, sans) => {
 // pureza de render — la variedad visual no necesita entropía real.
 const CONFETTI_COLORS = ['#53dd6c', '#ffd75e', '#e05265', '#ffffff', '#229ED9']
 
+// Una dinámica por moneda del feed P2P — el mismo mapa que aplica gameSim en
+// applyOffers. Solo para explicarlo en la portada del juego.
+const LIVE_FX_LEGEND = [
+	{ coin: 'CUP', icon: '💵', color: '#8fe9a1', text: 'por encima de la tasa: dólar del cielo · por debajo: cráter' },
+	{ coin: 'MLC', icon: '🧲', color: '#7ab8ff', text: 'imán: las monedas te buscan solas' },
+	{ coin: 'CLÁSICA', icon: '🛡️', color: '#c6a2ff', text: 'escudo: te salva de un golpe' },
+	{ coin: 'ETECSA', icon: '📡', color: '#ff9f43', text: 'se va la señal, pero las monedas valen ×2' },
+	{ coin: 'TROPICAL', icon: '🌪️', color: '#ffd75e', text: 'turbo: más rápido y score ×2' },
+	{ coin: 'CASH', icon: '💸', color: '#53dd6c', text: 'lluvia de efectivo: monedas bonus' },
+	{ coin: 'GAS', icon: '⛽', color: '#a8e6cf', text: 'gravedad baja: saltos flotantes' },
+]
+
 function Confetti() {
 	const pieces = useMemo(() => {
 		const rand = mulberry32(0xC0FFE77)
@@ -265,15 +313,23 @@ export default function Game() {
 	const [nameError, setNameError] = useState(false)
 	const [board, setBoard] = useState(null) // {top: [...], runs}
 	const [rank, setRank] = useState(null)
+	const [submitError, setSubmitError] = useState(null)
 	const submittedRef = useRef(false) // one submission per death
 	const runTokenRef = useRef(null) // signed run token, issued at takeoff (anti-cheat)
 	const runTokenPromiseRef = useRef(null) // in-flight token fetch — awaited at submit so fast deaths don't race it
+	// Token del PRÓXIMO run, pedido por adelantado. La edad del token es el
+	// presupuesto de tiempo del run en el verificador, así que pedirlo cuando ya
+	// empezaste a correr le regala tu latencia de red al reloj — en conexiones
+	// lentas eso mandaba runs honestos al honeypot.
+	const spareTokenRef = useRef(null) // {token, at}
 	const revRef = useRef(null) // snapshot id de la historia usada para el course (anti-cheat)
 	const traceRef = useRef(null) // traza del run (saltos/ofertas/resizes por paso) — el server la re-simula
 
 	useEffect(() => {
 		try {
-			// eslint-disable-next-line react-hooks/set-state-in-effect -- sincroniza estado externo (localStorage) al montar
+			// Sincroniza estado externo (localStorage) al montar. Si react-hooks vuelve
+			// a analizar este componente, hará falta un eslint-disable-next-line de
+			// react-hooks/set-state-in-effect aquí.
 			setBest(JSON.parse(localStorage.getItem(BEST_KEY)))
 			// Only accept a stored name if it's a valid Telegram handle (older saves may predate the @ format)
 			const savedName = normalizeTg(localStorage.getItem(NAME_KEY))
@@ -284,6 +340,12 @@ export default function Game() {
 		coinImgRef.current = img
 	}, [])
 
+	// Un token por run: se pide con antelación para que su edad cubra el run entero
+	const fetchToken = useCallback(
+		() => fetch('/api/game-token').then((res) => res.json()).then((json) => json.token || null).catch(() => null),
+		[],
+	)
+
 	const fetchBoard = useCallback(async () => {
 		try {
 			const res = await fetch('/api/game-score')
@@ -291,7 +353,7 @@ export default function Game() {
 		} catch { /* leaderboard is optional decoration */ }
 	}, [])
 
-	// eslint-disable-next-line react-hooks/set-state-in-effect -- setBoard ocurre tras un await, no es síncrono
+	// setBoard ocurre tras un await, no es síncrono (ver nota del efecto de arriba)
 	useEffect(() => { fetchBoard() }, [fetchBoard])
 
 	// Load the real CUP history (full series, bucketed server-side)
@@ -310,6 +372,8 @@ export default function Game() {
 				courseRef.current = buildCourse(json.data)
 				revRef.current = json.rev ?? null
 				setStatus('ready')
+				// Deja un token listo antes de que toquen "jugar"
+				fetchToken().then((token) => { if (token) spareTokenRef.current = { token, at: Date.now() } })
 			} catch (err) {
 				console.error('Error loading game data:', err)
 				if (!cancelled) setStatus('error')
@@ -317,7 +381,7 @@ export default function Game() {
 		}
 		load()
 		return () => { cancelled = true }
-	}, [])
+	}, [fetchToken])
 
 	// ── Engine ──────────────────────────────────────────────────────────────
 	useEffect(() => {
@@ -329,13 +393,20 @@ export default function Game() {
 		const audio = audioRef.current
 		audio.preload() // fetch + decode the real coin recordings (no-op after the first run)
 
-		// Anti-cheat: a signed run token is issued at takeoff — its age proves the
-		// run's real duration when the score is submitted
-		runTokenRef.current = null
-		runTokenPromiseRef.current = fetch('/api/game-token')
-			.then((res) => res.json())
-			.then((json) => { runTokenRef.current = json.token || null; return runTokenRef.current })
-			.catch(() => null) // run still plays; the score just won't rank
+		// Anti-cheat: el run va firmado con un token cuya edad prueba cuánto duró de
+		// verdad. Se usa el que ya estaba pedido (así su reloj arranca ANTES que el
+		// run y la latencia no se descuenta del presupuesto); si no hay uno fresco
+		// se pide ahora y el submit lo espera.
+		const spare = spareTokenRef.current
+		spareTokenRef.current = null
+		if (spare && Date.now() - spare.at < 20 * 60 * 1000) {
+			runTokenRef.current = spare.token
+			runTokenPromiseRef.current = Promise.resolve(spare.token)
+		} else {
+			runTokenRef.current = null
+			runTokenPromiseRef.current = fetchToken().then((token) => { runTokenRef.current = token; return token })
+		}
+		fetchToken().then((token) => { if (token) spareTokenRef.current = { token, at: Date.now() } })
 		const course = courseRef.current
 		const { values, times, spikes, coins, stars, n, finishX } = course
 
@@ -367,12 +438,73 @@ export default function Game() {
 		// Vistas estables sobre el estado de la sim (mutadas en sitio, nunca reasignadas)
 		const holes = state.holes
 		const liveDollars = state.liveDollars
+		const bonusCoins = state.bonusCoins
 		const taken = state.taken
 		const R = state.r
 		const PX = state.px
 		const trail = []
 		const popups = []
+		const particles = []   // {x, y, vx, vy, t, ttl, r, color, kind} — puro adorno
+		const banners = []     // avisos de dinámica en vivo {title, sub, color, t}
+		let shake = 0          // sacudida de cámara (px), decae sola
+		let flash = null       // {color, t} — destello a pantalla completa
 		let raf = 0
+
+		// Partículas: pool con tope duro para no ahogar un móvil lento
+		const MAX_PARTICLES = 200
+		const spawn = (count, make) => {
+			for (let i = 0; i < count && particles.length < MAX_PARTICLES; i++) particles.push(make(i))
+		}
+		const burst = (x, y, count, color, opts = {}) => {
+			const { speed = 170, ttl = 0.6, r = 3, kind = 'dot', spread = Math.PI * 2, dir = 0 } = opts
+			spawn(count, () => {
+				const a = dir + (Math.random() - 0.5) * spread
+				const v = speed * (0.35 + Math.random() * 0.65)
+				return { x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 0, ttl: ttl * (0.7 + Math.random() * 0.6), r: r * (0.6 + Math.random()), color, kind }
+			})
+		}
+
+		// El cielo viaja por las eras de la historia: el color de fondo avanza con
+		// el día, así que se NOTA que estás cruzando tres años de tasa del CUP
+		const totalDays = dayAt(course, n - 1)
+		const ERAS = [
+			{ at: 0.00, sky: [13, 12, 24], glow: [88, 46, 140] },
+			{ at: 0.34, sky: [10, 15, 26], glow: [26, 96, 146] },
+			{ at: 0.68, sky: [20, 14, 13], glow: [152, 76, 32] },
+			{ at: 1.00, sky: [9, 19, 14], glow: [36, 150, 78] },
+		]
+		const eraColor = (t) => {
+			let a = ERAS[0], b = ERAS[ERAS.length - 1]
+			for (let i = 0; i < ERAS.length - 1; i++) {
+				if (t >= ERAS[i].at && t <= ERAS[i + 1].at) { a = ERAS[i]; b = ERAS[i + 1]; break }
+			}
+			const k = b.at === a.at ? 0 : (t - a.at) / (b.at - a.at)
+			const mix = (p, q) => Math.round(p + (q - p) * k)
+			return {
+				sky: a.sky.map((c, i) => mix(c, b.sky[i])),
+				glow: a.glow.map((c, i) => mix(c, b.glow[i])),
+			}
+		}
+		const rgb = (c, alpha) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${alpha})`
+
+		// Silueta lejana: la MISMA curva del CUP repetida a otra escala y otra
+		// velocidad. El fondo no es decoración genérica, es el propio gráfico.
+		const ridge = (wx0, factor, squeeze, offset, fillStyle) => {
+			ctx.beginPath()
+			ctx.moveTo(-10, H + 20)
+			for (let sx = -10; sx <= W + 10; sx += 10) {
+				const wx = (wx0 * factor + sx) * 1.7
+				const fi = wx / DX
+				const i0 = Math.floor(fi)
+				const ft = fi - i0
+				const hh = course.heights[((i0 % n) + n) % n] * (1 - ft) + course.heights[((i0 + 1) % n + n) % n] * ft
+				ctx.lineTo(sx, H * offset - hh * H * squeeze)
+			}
+			ctx.lineTo(W + 10, H + 20)
+			ctx.closePath()
+			ctx.fillStyle = fillStyle
+			ctx.fill()
+		}
 
 		// Live offers as difficulty events: same feed as the homepage cards
 		// (/api/offers, 3s poll). Offer ≥ nominal → a dollar falls from the sky;
@@ -393,22 +525,54 @@ export default function Game() {
 
 		const fmtValue = (v) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+		// Ficha visual de cada dinámica: color, icono y copy del banner. La sim ya
+		// aplicó el efecto; esto es solo cómo se lee en pantalla.
+		const FX_LOOK = {
+			dollar: { color: '#8fe9a1', icon: '💵', title: 'DÓLAR DEL CIELO', sub: 'esquívalo' },
+			crater: { color: '#e05265', icon: '🕳️', title: 'CRÁTER EN VIVO', sub: 'doble salto' },
+			magnet: { color: '#7ab8ff', icon: '🧲', title: 'IMÁN MLC', sub: 'las monedas te buscan' },
+			shield: { color: '#c6a2ff', icon: '🛡️', title: 'ESCUDO CLÁSICA', sub: 'aguanta un golpe' },
+			blackout: { color: '#ff9f43', icon: '📡', title: 'SE FUE ETECSA', sub: 'sin señal · monedas ×2' },
+			turbo: { color: '#ffd75e', icon: '🌪️', title: 'RACHA TROPICAL', sub: 'más rápido · score ×2' },
+			lowgrav: { color: '#a8e6cf', icon: '⛽', title: 'GRAVEDAD BAJA', sub: 'saltos flotantes' },
+			cash: { color: '#53dd6c', icon: '💸', title: 'LLUVIA DE EFECTIVO', sub: 'monedas bonus' },
+		}
+
+		// Anuncia en pantalla una dinámica recién disparada por el feed P2P
+		const announce = (ev) => {
+			const look = FX_LOOK[ev.fx]
+			if (!look) return
+			banners.push({
+				title: `${look.icon} ${look.title}`,
+				sub: `${ev.coin} · $${fmtValue(ev.value)} · ${look.sub}`,
+				color: look.color,
+				t: 0,
+			})
+			if (banners.length > 3) banners.shift()
+			flash = { color: look.color, t: 0 }
+			if (ev.fx === 'crater' || ev.fx === 'dollar') shake = Math.max(shake, 7)
+			audio.event(ev.fx)
+			burst(PX, state.py, 14, look.color, { speed: 230, ttl: 0.5, r: 2.6 })
+		}
+
 		// El spawn (posiciones incluidas) lo computa gameSim desde el estado, así el
-		// server reproduce lo mismo con solo [paso, id, value] en la traza
+		// server reproduce lo mismo con solo [paso, id] en la traza
 		const fetchOffers = async () => {
 			try {
 				const res = await fetch('/api/offers')
 				const json = await res.json()
-				if (state.dead || !json.offers?.length) return
+				if (state.dead || state.won || !json.offers?.length) return
 				const batch = []
 				for (const o of json.offers) {
 					if (seenOffers.has(o.id)) continue
 					seenOffers.add(o.id)
-					batch.push({ id: o.id, value: Number(o.value) || 0 })
+					batch.push({ id: o.id, value: Number(o.value) || 0, coin: o.coin, status: o.status, type: o.type })
 				}
 				if (!batch.length) return
-				for (const o of batch) trace.offers.push([state.steps, o.id, o.value])
-				applyOffers(state, course, batch)
+				// La traza solo guarda [paso, id]: moneda, valor y estado los relee el
+				// verificador de la tabla `offers`, así que no hay nada que falsear
+				for (const o of batch) trace.offers.push([state.steps, o.id])
+				for (const ev of applyOffers(state, course, batch)) announce(ev)
 			} catch { /* offline tick — retry on next poll */ }
 		}
 		fetchOffers()
@@ -469,6 +633,41 @@ export default function Game() {
 		canvas.addEventListener('pointerdown', onPointer)
 		window.addEventListener('keydown', onKey)
 
+		// Reacción audiovisual a cada evento de la sim. Devuelve true si el run
+		// terminó, para que el bucle de física corte en el mismo punto.
+		const onSimEvent = (ev) => {
+			if (ev.type === 'coin') {
+				audio.coin(ev.combo)
+				const x2 = ev.mult > 1 ? ` ×${ev.mult}` : ''
+				popups.push({ x: PX, y: ev.cy - 20, text: `+${ev.gain} ×${ev.combo}${x2}`, t: 0, color: ev.mult > 1 ? '#ffd75e' : '#53dd6c' })
+				burst(PX, ev.cy, ev.mult > 1 ? 9 : 5, '#ffd75e', { speed: 130, ttl: 0.45, r: 2.2 })
+				return false
+			}
+			if (ev.type === 'bonus') {
+				audio.bonus()
+				popups.push({ x: PX, y: ev.cy - 20, text: `+${ev.gain} EFECTIVO`, t: 0, color: '#53dd6c' })
+				burst(PX, ev.cy, 12, '#53dd6c', { speed: 190, ttl: 0.55, r: 2.6, kind: 'bill' })
+				return false
+			}
+			if (ev.type === 'shield') {
+				// El escudo de CLASICA absorbió el golpe: sacudida + onda morada
+				audio.shieldSave()
+				shake = 16
+				flash = { color: '#c6a2ff', t: 0 }
+				popups.push({ x: PX, y: state.py - 40, text: '🛡️ ¡SALVADO!', t: 0, color: '#c6a2ff' })
+				burst(PX, state.py, 26, '#c6a2ff', { speed: 300, ttl: 0.7, r: 3.2 })
+				return false
+			}
+			if (ev.type === 'die') {
+				shake = 22
+				burst(PX, state.py, 30, '#e05265', { speed: 320, ttl: 0.9, r: 3.4 })
+				endRun(false)
+				return true
+			}
+			if (ev.type === 'win') { endRun(true); return true }
+			return false
+		}
+
 		let lastT = performance.now()
 		let acc = 0
 
@@ -480,38 +679,61 @@ export default function Game() {
 			acc += dt
 			while (acc >= STEP) {
 				acc -= STEP
-				for (const ev of stepPhysics(state, course)) {
-					if (ev.type === 'coin') {
-						audio.coin(ev.combo)
-						popups.push({ x: PX, y: ev.cy - 20, text: `+${ev.gain} ×${ev.combo}`, t: 0 })
-					} else if (ev.type === 'die') { endRun(false); return }
-					else if (ev.type === 'win') { endRun(true); return }
-				}
+				for (const ev of stepPhysics(state, course)) { if (onSimEvent(ev)) return }
 			}
 
 			const { worldX, py, elapsed, score, combo, comboTimer } = state
 			const pwx = worldX + PX
+			const magnetOn = state.magnet > 0
+			const turboOn = state.turbo > 0
+			const blackoutOn = state.blackout > 0
+			const lowgravOn = state.lowgrav > 0
 
 			trail.push({ y: py })
 			if (trail.length > 14) trail.shift()
 
 			// ── Draw ──
+			// Cielo de la era actual: el color avanza con el día, de los morados de
+			// 2023 al verde de hoy
+			const era = eraColor(Math.min(1, dayAt(course, Math.floor(pwx / DX)) / totalDays))
 			const bg = ctx.createLinearGradient(0, 0, 0, H)
-			bg.addColorStop(0, '#0b0c10')
-			bg.addColorStop(1, '#0c0d12')
+			bg.addColorStop(0, rgb(era.sky, 1))
+			bg.addColorStop(1, `rgb(${Math.round(era.sky[0] * 0.6)}, ${Math.round(era.sky[1] * 0.6)}, ${Math.round(era.sky[2] * 0.6)})`)
 			ctx.fillStyle = bg
+			ctx.fillRect(0, 0, W, H)
+
+			// Resplandor de la era, anclado al horizonte
+			const glow = ctx.createRadialGradient(W * 0.62, H * 0.52, 0, W * 0.62, H * 0.52, Math.max(W, H) * 0.75)
+			glow.addColorStop(0, rgb(era.glow, blackoutOn ? 0.05 : 0.17))
+			glow.addColorStop(0.55, rgb(era.glow, 0.05))
+			glow.addColorStop(1, rgb(era.glow, 0))
+			ctx.fillStyle = glow
 			ctx.fillRect(0, 0, W, H)
 
 			ctx.fillStyle = '#ffffff'
 			for (const st of stars) {
 				const span = W * 1.5
 				const sx = ((st.x * span - worldX * 0.06) % span + span) % span - W * 0.25
-				ctx.globalAlpha = st.a
+				ctx.globalAlpha = st.a * (0.6 + 0.4 * Math.sin(elapsed * 1.6 + st.x * 30))
 				ctx.beginPath()
 				ctx.arc(sx, st.y * H, st.r, 0, Math.PI * 2)
 				ctx.fill()
 			}
 			ctx.globalAlpha = 1
+
+			// Cordilleras de parallax: la misma curva del CUP, más lejos y más lenta
+			// Por encima del horizonte: el terreno cercano las tapa cuando sube, que es
+			// justo la sensación de profundidad que se busca
+			ridge(worldX, 0.10, 0.20, 0.56, rgb(era.glow, 0.13))
+			ridge(worldX, 0.26, 0.26, 0.67, rgb(era.glow, 0.2))
+
+			// Cámara: sacudidas por golpes y cráteres. Todo el mundo se dibuja
+			// dentro de este translate; el HUD queda fuera para que no tiemble.
+			ctx.save()
+			if (shake > 0.4) {
+				ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake)
+				shake *= Math.pow(0.0025, dt) // decae ~exponencial, independiente del framerate
+			} else shake = 0
 
 			// Spikes ARE the chart: the line itself shoots up into a sharp red peak
 			// (like a price wick), so they're born from the line by construction
@@ -697,22 +919,77 @@ export default function Game() {
 			}
 
 			// Coins
+			const coinMult = (blackoutOn ? 2 : 1) * (turboOn ? 2 : 1)
 			for (const c of coins) {
-				const sx = c.x - worldX
+				let sx = c.x - worldX
 				if (sx < -30 || sx > W + 30 || taken.has(c.id)) continue
-				const cy = terrainY(c.x) - c.dy + Math.sin(elapsed * 3 + c.id) * 4
-				ctx.fillStyle = '#ffd75e'
+				let cy = terrainY(c.x) - c.dy + Math.sin(elapsed * 3 + c.id) * 4
+				// Imán de MLC: la moneda se ve viajar hacia ti dentro del radio real
+				// de recogida, así que lo que ves es lo que la física ya hace
+				if (magnetOn) {
+					const dx = PX - sx
+					const dy = py - cy
+					const d = Math.sqrt(dx * dx + dy * dy)
+					const reach = R + 12 + MAGNET_RADIUS
+					if (d < reach && d > 0.001) {
+						const pull = 1 - d / reach
+						sx += dx * pull * 0.55
+						cy += dy * pull * 0.55
+					}
+				}
+				const hot = coinMult > 1
+				ctx.fillStyle = hot ? '#fff0b3' : '#ffd75e'
 				ctx.shadowColor = '#ffd75e'
-				ctx.shadowBlur = 10
+				ctx.shadowBlur = hot ? 18 : 10
 				ctx.beginPath()
-				ctx.arc(sx, cy, 11, 0, Math.PI * 2)
+				ctx.arc(sx, cy, hot ? 12.5 : 11, 0, Math.PI * 2)
 				ctx.fill()
 				ctx.shadowBlur = 0
+				if (magnetOn) {
+					ctx.strokeStyle = 'rgba(122, 184, 255, 0.55)'
+					ctx.lineWidth = 1.5
+					ctx.beginPath()
+					ctx.arc(sx, cy, 15, 0, Math.PI * 2)
+					ctx.stroke()
+				}
 				ctx.fillStyle = '#7a5b00'
 				ctx.font = '800 13px ui-monospace, SFMono-Regular, Menlo, monospace'
 				ctx.textAlign = 'center'
 				ctx.textBaseline = 'middle'
 				ctx.fillText('$', sx, cy + 1)
+			}
+
+			// Lluvia de efectivo (CASH): billetes bonus, no suben el combo
+			for (const b of bonusCoins) {
+				let sx = b.x - worldX
+				if (sx < -40 || sx > W + 40) continue
+				let by = terrainY(b.x) - b.dy + Math.sin(elapsed * 4 + b.x * 0.02) * 3
+				if (magnetOn) {
+					const dx = PX - sx
+					const dy = py - by
+					const d = Math.sqrt(dx * dx + dy * dy)
+					const reach = R + 12 + MAGNET_RADIUS
+					if (d < reach && d > 0.001) { sx += dx * (1 - d / reach) * 0.55; by += dy * (1 - d / reach) * 0.55 }
+				}
+				ctx.save()
+				ctx.translate(sx, by)
+				ctx.rotate(Math.sin(elapsed * 2.5 + b.x * 0.01) * 0.25)
+				ctx.shadowColor = '#53dd6c'
+				ctx.shadowBlur = 14
+				ctx.fillStyle = '#146623'
+				roundedRect(ctx, -17, -10, 34, 20, 4)
+				ctx.fill()
+				ctx.shadowBlur = 0
+				ctx.strokeStyle = '#8fe9a1'
+				ctx.lineWidth = 1.4
+				roundedRect(ctx, -17, -10, 34, 20, 4)
+				ctx.stroke()
+				ctx.fillStyle = '#d6f5dc'
+				ctx.font = `800 12px ${MONO}`
+				ctx.textAlign = 'center'
+				ctx.textBaseline = 'middle'
+				ctx.fillText('$', 0, 1)
+				ctx.restore()
 			}
 
 			// Live crater warnings: dashed red line across the gap + offer tag
@@ -798,10 +1075,67 @@ export default function Game() {
 				ctx.globalAlpha = 1
 			}
 
-			// Player: trail + real 1-peso coin (public/cup.png) rolling
+			// Partículas (monedas, impactos, escudo). Puro adorno: viven fuera de la sim.
+			for (let i = particles.length - 1; i >= 0; i--) {
+				const pt = particles[i]
+				pt.t += dt
+				if (pt.t >= pt.ttl) { particles.splice(i, 1); continue }
+				pt.x += pt.vx * dt
+				pt.y += pt.vy * dt
+				pt.vy += 520 * dt
+				const k = 1 - pt.t / pt.ttl
+				ctx.globalAlpha = k
+				ctx.fillStyle = pt.color
+				if (pt.kind === 'bill') {
+					ctx.fillRect(pt.x - worldX * 0 - pt.r, pt.y - pt.r * 0.6, pt.r * 2, pt.r * 1.2)
+				} else {
+					ctx.beginPath()
+					ctx.arc(pt.x, pt.y, pt.r * k, 0, Math.PI * 2)
+					ctx.fill()
+				}
+			}
+			ctx.globalAlpha = 1
+
+			// Líneas de velocidad del turbo tropical
+			if (turboOn) {
+				ctx.strokeStyle = 'rgba(255, 215, 94, 0.2)'
+				ctx.lineWidth = 1.5
+				for (let i = 0; i < 6; i++) {
+					const ly = ((elapsed * 700 + i * 211) % (H * 0.75)) + H * 0.05
+					const lx = ((elapsed * 1800 + i * 311) % (W + 300)) - 150
+					ctx.beginPath()
+					ctx.moveTo(lx + 44, ly)
+					ctx.lineTo(lx, ly + 3)
+					ctx.stroke()
+				}
+			}
+
+			// Motas flotando hacia arriba mientras dura la gravedad baja
+			if (lowgravOn) {
+				ctx.fillStyle = 'rgba(168, 230, 207, 0.4)'
+				for (let i = 0; i < 12; i++) {
+					const fx2 = ((i * 97 + elapsed * 40) % (W + 40)) - 20
+					const fy2 = H - ((elapsed * 60 + i * 83) % (H + 60))
+					ctx.beginPath()
+					ctx.arc(fx2, fy2, 2, 0, Math.PI * 2)
+					ctx.fill()
+				}
+			}
+
+			// Player: sombra + trail + moneda real de 1 peso (public/cup.png) rodando
+			{
+				const gy = terrainY(pwx)
+				const air = Math.max(0, Math.min(1, (gy - R - py) / 220))
+				ctx.globalAlpha = 0.28 * (1 - air)
+				ctx.fillStyle = '#000000'
+				ctx.beginPath()
+				ctx.ellipse(PX, gy - 2, R * (1 - air * 0.5), R * 0.3 * (1 - air * 0.5), 0, 0, Math.PI * 2)
+				ctx.fill()
+				ctx.globalAlpha = 1
+			}
 			for (let i = 0; i < trail.length; i++) {
-				ctx.globalAlpha = (i / trail.length) * 0.25
-				ctx.fillStyle = '#f0c85a'
+				ctx.globalAlpha = (i / trail.length) * (turboOn ? 0.4 : 0.25)
+				ctx.fillStyle = turboOn ? '#ffd75e' : '#f0c85a'
 				ctx.beginPath()
 				ctx.arc(PX - (trail.length - i) * 4.5, trail[i].y, R * (0.4 + (i / trail.length) * 0.5), 0, Math.PI * 2)
 				ctx.fill()
@@ -809,8 +1143,13 @@ export default function Game() {
 			ctx.globalAlpha = 1
 			ctx.save()
 			ctx.translate(PX, py)
+			// Squash & stretch: se estira al caer y se achata al asentarse
+			const stretch = Math.max(-0.22, Math.min(0.22, state.vy / 4200))
+			ctx.scale(1 - stretch, 1 + stretch)
 			ctx.rotate((worldX / R) * 0.7) // rueda: ángulo ∝ distancia recorrida
 			const img = coinImgRef.current
+			const invulnOn = state.invuln > 0
+			ctx.globalAlpha = invulnOn && Math.floor(elapsed * 20) % 2 === 0 ? 0.45 : 1
 			if (img?.complete && img.naturalWidth) {
 				ctx.shadowColor = 'rgba(255, 210, 110, 0.8)'
 				ctx.shadowBlur = 18
@@ -830,6 +1169,69 @@ export default function Game() {
 				ctx.shadowBlur = 0
 			}
 			ctx.restore()
+
+			// Burbuja de escudo (CLASICA) y anillo del imán (MLC) alrededor del jugador
+			if (state.shield > 0) {
+				for (let i = 0; i < state.shield; i++) {
+					ctx.strokeStyle = `rgba(198, 162, 255, ${0.75 - i * 0.18})`
+					ctx.lineWidth = 2
+					ctx.beginPath()
+					ctx.arc(PX, py, R + 9 + i * 5 + Math.sin(elapsed * 3 + i) * 1.6, 0, Math.PI * 2)
+					ctx.stroke()
+				}
+			}
+			if (magnetOn) {
+				const reach = R + 12 + MAGNET_RADIUS
+				ctx.strokeStyle = `rgba(122, 184, 255, ${0.16 + 0.12 * Math.sin(elapsed * 6)})`
+				ctx.lineWidth = 2
+				ctx.setLineDash([5, 7])
+				ctx.beginPath()
+				ctx.arc(PX, py, reach, 0, Math.PI * 2)
+				ctx.stroke()
+				ctx.setLineDash([])
+			}
+
+			ctx.restore() // ← fin de la cámara con shake: el HUD ya no tiembla
+
+			// Apagón de ETECSA: se cierra la viñeta y se cae la señal
+			if (blackoutOn) {
+				const dark = ctx.createRadialGradient(PX, py, R * 2, PX, py, Math.max(W, H) * 0.62)
+				dark.addColorStop(0, 'rgba(0,0,0,0)')
+				dark.addColorStop(0.45, 'rgba(0,0,0,0.42)')
+				dark.addColorStop(1, 'rgba(0,0,0,0.88)')
+				ctx.fillStyle = dark
+				ctx.fillRect(0, 0, W, H)
+				// Banda de glitch que barre la pantalla
+				const gy2 = ((elapsed * 260) % (H + 80)) - 40
+				ctx.fillStyle = 'rgba(255, 159, 67, 0.09)'
+				ctx.fillRect(0, gy2, W, 22)
+				ctx.fillStyle = 'rgba(255, 159, 67, 0.75)'
+				ctx.font = `800 13px ${MONO}`
+				ctx.textAlign = 'center'
+				ctx.textBaseline = 'alphabetic'
+				ctx.globalAlpha = 0.5 + 0.5 * Math.sin(elapsed * 9)
+				ctx.fillText('📡 SIN SEÑAL — MONEDAS ×2', W / 2, H * 0.4)
+				ctx.globalAlpha = 1
+			}
+
+			// Destello al dispararse una dinámica
+			if (flash) {
+				flash.t += dt
+				if (flash.t > 0.35) flash = null
+				else {
+					ctx.globalAlpha = (1 - flash.t / 0.35) * 0.16
+					ctx.fillStyle = flash.color
+					ctx.fillRect(0, 0, W, H)
+					ctx.globalAlpha = 1
+				}
+			}
+
+			// Viñeta: enfoca el centro y le da cuerpo a la escena
+			const vig = ctx.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.35, W / 2, H * 0.55, Math.max(W, H) * 0.78)
+			vig.addColorStop(0, 'rgba(0,0,0,0)')
+			vig.addColorStop(1, 'rgba(0,0,0,0.45)')
+			ctx.fillStyle = vig
+			ctx.fillRect(0, 0, W, H)
 
 			// HUD
 			const day = dayAt(course, Math.floor(pwx / DX))
@@ -855,6 +1257,68 @@ export default function Game() {
 			ctx.textAlign = 'right'
 			ctx.fillText('ø fechas ocultas hasta que caigas', W - 16, 32)
 
+			// Fichas de dinámicas activas: icono + barra de cuenta atrás. Sin esto
+			// el jugador no sabe cuánto le queda de imán, turbo o apagón.
+			const chips = []
+			if (state.turbo > 0) chips.push({ icon: '🌪️', color: '#ffd75e', k: state.turbo / (7 * 120) })
+			if (state.magnet > 0) chips.push({ icon: '🧲', color: '#7ab8ff', k: state.magnet / (8 * 120) })
+			if (state.blackout > 0) chips.push({ icon: '📡', color: '#ff9f43', k: state.blackout / (6 * 120) })
+			if (state.lowgrav > 0) chips.push({ icon: '⛽', color: '#a8e6cf', k: state.lowgrav / (6 * 120) })
+			for (let i = 0; i < state.shield; i++) chips.push({ icon: '🛡️', color: '#c6a2ff', k: 1 })
+			ctx.textAlign = 'center'
+			ctx.textBaseline = 'middle'
+			for (let i = 0; i < chips.length; i++) {
+				const c = chips[i]
+				const cx = W - 32 - i * 46
+				const cy = 72
+				ctx.fillStyle = 'rgba(0,0,0,0.45)'
+				roundedRect(ctx, cx - 19, cy - 19, 38, 38, 11)
+				ctx.fill()
+				ctx.strokeStyle = c.color
+				ctx.lineWidth = 2
+				roundedRect(ctx, cx - 19, cy - 19, 38, 38, 11)
+				ctx.stroke()
+				ctx.font = '19px sans-serif'
+				ctx.fillText(c.icon, cx, cy - 2)
+				if (c.k < 1) {
+					ctx.fillStyle = 'rgba(255,255,255,0.18)'
+					ctx.fillRect(cx - 14, cy + 12, 28, 3)
+					ctx.fillStyle = c.color
+					ctx.fillRect(cx - 14, cy + 12, 28 * Math.max(0, Math.min(1, c.k)), 3)
+				}
+			}
+			// Banners de las ofertas reales que acaban de entrar al run
+			for (let i = banners.length - 1; i >= 0; i--) {
+				const b = banners[i]
+				b.t += dt
+				if (b.t > 2.6) { banners.splice(i, 1); continue }
+				const slot = banners.length - 1 - i
+				const appear = Math.min(1, b.t / 0.18)
+				const fade = b.t > 2.1 ? 1 - (b.t - 2.1) / 0.5 : 1
+				const by = H * 0.17 + slot * 46
+				ctx.globalAlpha = Math.max(0, fade)
+				ctx.translate(0, (1 - appear) * -18)
+				const bw = Math.min(W - 40, 320)
+				ctx.fillStyle = 'rgba(8, 9, 13, 0.82)'
+				roundedRect(ctx, W / 2 - bw / 2, by - 18, bw, 40, 13)
+				ctx.fill()
+				ctx.strokeStyle = b.color
+				ctx.lineWidth = 1.6
+				roundedRect(ctx, W / 2 - bw / 2, by - 18, bw, 40, 13)
+				ctx.stroke()
+				ctx.fillStyle = b.color
+				ctx.font = `800 13px ${mono}`
+				ctx.textAlign = 'center'
+				ctx.textBaseline = 'alphabetic'
+				ctx.fillText(b.title, W / 2, by - 1)
+				ctx.fillStyle = 'rgba(255,255,255,0.55)'
+				ctx.font = `600 11px ${mono}`
+				ctx.fillText(b.sub, W / 2, by + 14)
+				ctx.translate(0, (1 - appear) * 18)
+				ctx.globalAlpha = 1
+			}
+			ctx.textBaseline = 'alphabetic'
+
 			raf = requestAnimationFrame(frame)
 		}
 
@@ -867,7 +1331,7 @@ export default function Game() {
 			window.removeEventListener('keydown', onKey)
 			canvas.removeEventListener('pointerdown', onPointer)
 		}
-	}, [status])
+	}, [status, fetchToken])
 
 	const shareUrl = 'https://www.cambiocup.com/play'
 	const flavor = !death
@@ -926,6 +1390,7 @@ export default function Game() {
 	const submitScore = useCallback(async (name) => {
 		if (!death || submittedRef.current) return
 		submittedRef.current = true
+		setSubmitError(null)
 		try {
 			localStorage.setItem(NAME_KEY, name)
 			setPlayerName(name)
@@ -948,14 +1413,21 @@ export default function Game() {
 				setRank(json.rank)
 				fetchBoard()
 			} else {
+				// Antes esto se tragaba el error en silencio: el jugador veía su
+				// récord local, ningún rank, y asumía que había quedado guardado
+				const json = await res.json().catch(() => null)
+				setSubmitError(json?.error || 'No se pudo guardar tu puntuación.')
 				submittedRef.current = false
 			}
-		} catch { submittedRef.current = false }
+		} catch {
+			setSubmitError('Sin conexión — toca para reintentar.')
+			submittedRef.current = false
+		}
 	}, [death, fetchBoard])
 
 	// Known player: submit automatically the moment the death screen appears
 	useEffect(() => {
-		// eslint-disable-next-line react-hooks/set-state-in-effect -- setRank/setBoard ocurren tras un await, no es síncrono
+		// setRank/setBoard ocurren tras un await, no es síncrono (ver nota de arriba)
 		if (status === 'dead' && death && playerName) submitScore(playerName)
 	}, [status, death, playerName, submitScore])
 
@@ -965,6 +1437,7 @@ export default function Game() {
 		setDeath(null)
 		setRank(null)
 		submittedRef.current = false
+		setSubmitError(null)
 		setStatus('playing')
 	}, [share])
 
@@ -1005,12 +1478,24 @@ export default function Game() {
 						doble salto; los <strong>huecos</strong> de las caídas, calcula bien la distancia.
 						Sobrevive hasta la <strong className="text-malachite-500">bandera de HOY 🏁</strong> y ganas.
 					</p>
-					<p className="max-w-md text-xs sm:text-sm text-white/50">
-						💸 Las ofertas <strong className="text-white/80">reales</strong> del mercado P2P entran
-						al juego <span className="text-malachite-500 font-bold">EN VIVO</span>: si pagan por encima de la
-						tasa te cae un <strong className="text-white/80">dólar del cielo</strong> 💵; si pagan por debajo,
-						se abre un <strong className="text-white/80">cráter de doble salto</strong>.
-					</p>
+					<div className="max-w-md">
+						<p className="text-xs sm:text-sm text-white/50">
+							💸 Las ofertas <strong className="text-white/80">reales</strong> del mercado P2P entran
+							al juego <span className="text-malachite-500 font-bold">EN VIVO</span>, y
+							<strong className="text-white/80"> cada moneda dispara lo suyo</strong>:
+						</p>
+						<ul className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1.5 text-left text-[11px] sm:text-xs text-white/60 sm:grid-cols-2">
+							{LIVE_FX_LEGEND.map((fx) => (
+								<li key={fx.coin} className="flex items-start gap-2">
+									<span className="shrink-0 text-sm leading-tight">{fx.icon}</span>
+									<span>
+										<strong className="font-bold" style={{ color: fx.color }}>{fx.coin}</strong>
+										<span className="text-white/45"> · {fx.text}</span>
+									</span>
+								</li>
+							))}
+						</ul>
+					</div>
 					{best && (
 						<p className="rounded-full liquid-glass liquid-glass--dark px-4 py-1.5 text-xs sm:text-sm text-white/80 tabular-nums">
 							🏆 Tu récord: {best.score.toLocaleString('es')} CUP — día {best.day}
@@ -1085,6 +1570,19 @@ export default function Game() {
 							</span>
 						)}
 					</div>
+
+					{/* Antes un fallo de guardado era invisible: el jugador veía su récord
+					    local, ningún rank, y se quedaba con que había quedado registrado */}
+					{submitError && (
+						<button
+							type="button"
+							onClick={() => { submittedRef.current = false; if (playerName) submitScore(playerName) }}
+							className="rounded-2xl border border-crimson-500/60 bg-crimson-500/10 px-4 py-2.5 text-xs font-bold text-crimson-500 transition-colors hover:bg-crimson-500/20"
+						>
+							⚠️ {submitError}
+							{playerName && <span className="ml-1 text-white/70">Toca para reintentar ↻</span>}
+						</button>
+					)}
 
 					{!playerName && (
 						<form

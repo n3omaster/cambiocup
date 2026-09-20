@@ -27,6 +27,7 @@ There are no tests in this project.
 3. **Display**: Frontend polls `/api` every 4s → `averageData()` splits first value vs rest average → `randomize()` adds micro-fluctuation → color set by current vs average comparison
 4. **Offers**: `/api/webhook` receives buy/sell offers → `/api/offers` serves recent ones → `FloatingOffers` renders animated bubbles. The same feed also drives live difficulty events in the game
 5. **Charts**: `/api/history` returns N-day data → `BackgroundLiveLine` renders a full-screen `liveline` chart behind the main content, fed the live randomized value between history refreshes
+6. **Live game dynamics**: every offer that reaches `/api/webhook` becomes an in-game event during a CUP Runner run, and **the coin decides which one** (see Live dynamics below)
 
 ### Directory Structure
 
@@ -65,7 +66,8 @@ lib/
 ├── gameToken.js               # Server-only HMAC run tokens for the game (issue/verify)
 └── gameHistory.js             # getBucketedHistory(coinId, asOf): parallel pagination past the 1000-row cap, buckets to ~2000 points
 scripts/
-└── harden-game-rls.sql        # Paste-into-Supabase script: drops all game_scores RLS policies (service_role-only access)
+├── harden-game-rls.sql        # Paste-into-Supabase script: drops all game_scores RLS policies (service_role-only access)
+└── fix-score-caps.sql         # Paste-into-Supabase: raises the score_cap/day_cap CHECKs and adds flag_reason. REQUIRED — without it any run over 500k points 500s and is lost
 colors.js                      # Color palettes (malachite, crimson, delft_blue, ghost_white, yale_blue)
 vercel.ts                      # Vercel config (@vercel/config): cron for /api/cron every 10 min
 ```
@@ -79,21 +81,42 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 | `/api/offers` | GET | — | Returns offers created in last 2 minutes |
 | `/api/history` | GET | `coin`, `days` | Returns `{data: [{time, value}], coin}` — `time` is a unix timestamp in seconds |
 | `/api/game-history` | GET | `coin` | Full history for `/play` via `lib/gameHistory.js`. Returns `{data, coin, rev}` — `rev` identifies the exact snapshot so the server can rebuild the same map at verify time. Edge-cached 1h |
-| `/api/game-score` | GET / POST | POST: `{t, d}` (token + scrambled payload) | Game leaderboard. GET returns `{top: [best score per player, max 10], runs}` (flagged rows excluded); POST re-simulates the submitted input trace and saves the run (see Anti-cheat below) |
+| `/api/game-score` | GET / POST | POST: `{t, d}` (token + scrambled payload) | Game leaderboard. GET returns `{top: [best score per player, max 10], runs}` (flagged rows excluded); POST re-simulates the submitted input trace and saves the run (see Anti-cheat below). Sanity caps are `MAX_SCORE` 15M / `MAX_DAY` 20000 — they only exist to avoid re-simulating absurd claims, since the replay checks the score exactly. **They must stay in sync with the `score_cap`/`day_cap` CHECKs on the table** |
 | `/api/game-token` | GET | — | Issues a signed run token (`base64url({t,n}).hmac`) when a run starts; its age proves the run's real duration at submit time. Max age 30 min |
 | `/api/og` | GET | `coin` | Generates dynamic Open Graph image with current rate and trend |
 | `/api/og/play` | GET | — | OG card for the game: real CUP terrain (last 60 days), spike, current rate. Edge-cached 1h |
 | `/api/webhook` | POST | `{type, status, value, coin}` | Validates and saves a new offer |
+
+### CUP Runner live dynamics (one per coin)
+
+The P2P feed is the game's difficulty generator. `applyOffers()` in `gameSim.js` maps each offer to an event **by coin**; a `status: 'completed'` offer lasts 1.5× longer than an `'attempt'`. All of it is deterministic state (timers are integer step counts, never seconds), so the server verifier reproduces it exactly.
+
+| Coin | Event | Effect |
+|---|---|---|
+| CUP | Dólar del cielo / Cráter | `value >= nominal` drops a lethal falling dollar; `< nominal` opens a double-jump crater (the original rule) |
+| MLC | Imán | Coin pickup radius +`MAGNET_RADIUS` for 8 s — coins visibly fly to the player |
+| CLASICA | Escudo | Absorbs one **impact** death (spike, dollar, wall) and rebounds you into the air with `INVULN_STEPS` of invulnerability. Does **not** save you from falling into the void. Stacks to `MAX_SHIELDS` |
+| ETECSA | Apagón | 6 s: vignette closes in, glitch band sweeps — but every coin is worth ×2 |
+| TROPICAL | Turbo | 7 s: speed ×`TURBO_MULT` and score ×2 |
+| GAS | Gravedad baja | 6 s: gravity ×`LOWGRAV_MULT`, floaty jumps |
+| CASH | Lluvia de efectivo | Spawns `CASH_COINS` bonus coins in a parabolic arc (fixed `CASH_GAIN` each, no combo) |
+
+The multipliers stack (ETECSA + TROPICAL = ×4), which is why the score ceiling is ~4× the base course total of ~2.6M.
+
+**Adding a dynamic**: add the coin to `FX_BY_COIN` in `gameSim.js`, handle it in `applyOffers`, add its state field to `createSim` + its timer decrement in `stepPhysics`, then add its look to `FX_LOOK`, its sound to `audio.event()`, its HUD chip, and a line in `LIVE_FX_LEGEND` (all in `Game.js`). Add the coin to `validCoins` in `api/webhook/route.js` too.
 
 ### CUP Runner Anti-cheat (replay verification)
 
 The game's score submission is verified by **deterministic re-simulation**, not trust:
 
 1. `app/utils/gameSim.js` is a pure physics engine (fixed 120 Hz step, IEEE-754-exact arithmetic only — no `Math.sin`, time, or randomness in the collision path) shared verbatim by the client game and the server verifier. A run ends by dying **or** by crossing the finish flag at the last data point (`course.finishX`, "today") — both endings are deterministic sim states (`state.dead` / `state.won`) that the verifier reproduces
-2. The client records a **trace** of the run — jumps, live offers, and resizes, indexed by physics step — plus the map snapshot id `rev` from `/api/game-history`
+2. The client records a **trace** of the run — jumps, live offers, and resizes, indexed by physics step — plus the map snapshot id `rev` from `/api/game-history`. A live offer is recorded as **`[step, id]` only**: the verifier reads `value`/`coin`/`status` back from the `offers` table, so a client can't forge which dynamic fired (no turning a CUP crater into a CLASICA shield)
 3. On submit, the client sends `{t: runToken, d: payload}` where the payload (name, score, day, rev, trace) is XOR-scrambled with a keystream derived from the token (`gameCodec.js` — obfuscation so the body isn't editable JSON in the network tab; the real defense is server-side)
-4. `/api/game-score` verifies: token HMAC signature + age window (3s–30min, single-use nonce), score/day plausibility vs elapsed time, live offers in the trace exist in the `offers` table with matching values and timestamps inside the run window, then **re-runs the full simulation** on the same map (`getBucketedHistory(1, rev)` rebuilds the exact snapshot — `exchange` is append-only so filtering `updated_at <= rev` reproduces what the client saw) and requires the resulting score/day/steps to match exactly
+4. `/api/game-score` verifies: token HMAC signature + age window (3 s–60 min, single-use nonce), score/day plausibility vs elapsed time, live offers in the trace exist in the `offers` table with timestamps inside the run window, then **re-runs the full simulation** on the same map (`getBucketedHistory(1, rev)` rebuilds the exact snapshot — `exchange` is append-only so filtering `updated_at <= rev` reproduces what the client saw) and requires the resulting score/day/steps to match exactly
 5. **Honeypot**: anything that fails — plain `{name, score, day}` bodies, valid tokens with non-reproducing traces, fabricated offers — is saved with `flagged=true`, answered with a believable `{rank}`, and never shown anywhere. Malformed traces that crash the sim also go to the honeypot, not to a 400
+6. **`flag_reason`** records *why* a run was flagged (`token-expired`, `score-mismatch:N`, `offer-missing`, `rev-window`, `sim-crash`…). Without it there is no way to tell a cheater from a broken verification — ~40% of runs were being honeypotted and nobody could tell which were real players
+
+**Timing gotcha**: `elapsed` is measured from when the server signed the token, so any latency between the run starting and the token arriving is silently charged against the run. The client now **pre-fetches the next run's token** (`spareTokenRef`) so the token's clock starts before the run does, and `SIM_SLACK_S` is 20 s. Don't move the token fetch back into the run's start.
 
 **Gotcha**: any change to `gameSim.js` physics or to `buildCourse()` changes what the server reproduces — client and server must always run the same version, and in-flight runs straddling a deploy will fail verification (land in the honeypot). Same applies to the bucketing logic in `lib/gameHistory.js`.
 
@@ -107,9 +130,10 @@ The game's score submission is verified by **deterministic re-simulation**, not 
 - `id`, `type` ('buy'|'sell'), `status` ('attempt'|'completed'), `value` (float), `coin` (string), `created_at`
 
 **`game_scores` table** — CUP Runner leaderboard (one row per finished run):
-- `id`, `name` (Telegram handle, normalized `@lowercase`), `score` (int), `day` (int), `flagged` (bool, honeypot rows — excluded from all reads), `nonce` (text, run-token nonce; partial unique index makes tokens single-use), `created_at`
+- `id`, `name` (Telegram handle, normalized `@lowercase`), `score` (int), `day` (int), `flagged` (bool, honeypot rows — excluded from all reads), `flag_reason` (text, why it was flagged — null when clean), `nonce` (text, run-token nonce; partial unique index makes tokens single-use), `created_at`
+- **CHECK constraints `score_cap` / `day_cap` mirror `MAX_SCORE`/`MAX_DAY` in `api/game-score/route.js` and must be changed together.** They used to be 500000/10000 — below the game's real ceiling — so every run past ~day 483 was thrown away (the API 400'd before the row was ever attempted). `scripts/fix-score-caps.sql` raises them; if you see error `23514` on insert, that script hasn't been run
 - Index on `score desc`. `scripts/harden-game-rls.sql` drops all RLS policies so only `service_role` (which bypasses RLS) can touch the table — all access goes through `/api/game-score`. The Telegram @ is used to contact weekly winners
-- Inspect cheaters with `select name, score, day, created_at from game_scores where flagged order by created_at desc`
+- Inspect cheaters with `select name, score, day, flag_reason, created_at from game_scores where flagged order by created_at desc`, and triage verification failures with `select flag_reason, count(*) from game_scores where flagged group by 1 order by 2 desc`
 
 Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders newest-first so the cap keeps recent data, then reverses back to chronological order for charts. `lib/gameHistory.js` pages past the cap in parallel (10 concurrent pages) when the game needs the full series.
 
@@ -155,7 +179,20 @@ Optional: `GAME_SCORE_SECRET` — HMAC secret for game run tokens (falls back to
 
 - **Add a new coin**: Add QvaPay coin name in `api/cron/route.js` (`QVAPAY_COINS`) → Add coin_id in `lib/supabase.js` (COIN_IDS, getCoinData, saveCoinData) → Add entry to `COIN_CONFIG` in `page.js` → Add coin to `validCoins` in `api/webhook/route.js` → Add entry to `COINS` in `api/og/route.js`
 - **Change game physics/course**: Edit `app/utils/gameSim.js` — but remember client and server verifier share it (see Anti-cheat gotcha). Keep the collision path free of `Math.sin`/time/randomness
+- **Add a live dynamic**: see *CUP Runner live dynamics* above
+- **Raise the score ceiling**: change `MAX_SCORE`/`MAX_DAY` in `api/game-score/route.js` **and** the matching CHECKs in the DB (`scripts/fix-score-caps.sql`). Changing only one side silently loses runs
+- **Render-only game code**: everything inside the `frame()` loop in `Game.js` is outside the sim, so `Math.random`/`Math.sin` are fine there — but never let a render value feed back into sim state
 - **Change polling frequency**: Modify `setInterval` in the respective component (page.js=4s, FloatingOffers=3s, BackgroundLiveLine=30s)
 - **Change cron schedule**: Edit `crons` in `vercel.ts` (currently `*/10 * * * *`)
 - **Modify colors**: Edit `@theme` block in `globals.css` — custom Tailwind colors are defined there, not in a config file
 - **Edit SEO/metadata**: Update `metadata` export in `app/layout.js` (site-wide) or `app/play/page.js` / `app/play/top-scores/page.js` (game pages)
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

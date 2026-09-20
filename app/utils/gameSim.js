@@ -16,6 +16,33 @@ const STEP_HZ = 120
 const STEP = 1 / STEP_HZ    // paso fijo de física
 const COURSE_SEED = 20260724
 
+// ── Dinámicas en vivo (una por moneda del feed P2P) ─────────────────────────
+// Duraciones en PASOS (enteros) para que no haya deriva de coma flotante entre
+// cliente y verificador. Una oferta 'completed' pesa 1.5× — un trato cerrado
+// mueve más el mercado que un intento.
+const FX_MAGNET_STEPS = 8 * STEP_HZ    // MLC    → imán de monedas
+const FX_BLACKOUT_STEPS = 6 * STEP_HZ  // ETECSA → apagón (x2 score, sin visión)
+const FX_TURBO_STEPS = 7 * STEP_HZ     // TROPICAL → turbo (+35% velocidad, x2 score)
+const FX_LOWGRAV_STEPS = 6 * STEP_HZ   // GAS    → gravedad baja
+const INVULN_STEPS = 90                // 0.75 s tras salvarte un escudo
+const MAX_SHIELDS = 3                  // CLASICA → tope de escudos acumulables
+const TURBO_MULT = 1.35
+const LOWGRAV_MULT = 0.55
+const MAGNET_RADIUS = 46               // px extra de recogida mientras dura el imán
+const CASH_COINS = 6                   // CASH   → ráfaga de monedas bonus
+const CASH_GAIN = 150                  // valor fijo de cada moneda bonus
+
+// Monedas del feed que NO son CUP: cada una tiene su dinámica propia. El CUP
+// mantiene la regla original (oferta ≥ tasa → dólar del cielo; < tasa → cráter).
+const FX_BY_COIN = {
+	MLC: 'magnet',
+	CLASICA: 'shield',
+	ETECSA: 'blackout',
+	TROPICAL: 'turbo',
+	GAS: 'lowgrav',
+	CASH: 'cash',
+}
+
 const mulberry32 = (seed) => () => {
 	seed |= 0; seed = (seed + 0x6D2B79F5) | 0
 	let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
@@ -126,6 +153,15 @@ const createSim = (course, w, h) => ({
 	liveDollars: [],          // {x, y, vy, state:'fall'|'ground', groundT, value}
 	coinLo: 0,                // puntero deslizante sobre coins (ordenadas por x)
 	spikeLo: 0,               // ídem sobre spikes (ordenados por i)
+	// Dinámicas en vivo: contadores en pasos (0 = inactivo), todos deterministas
+	magnet: 0,
+	blackout: 0,
+	turbo: 0,
+	lowgrav: 0,
+	shield: 0,
+	invuln: 0,
+	bonusCoins: [],           // {x, dy, gain} — ráfagas de CASH, no persisten entre runs
+	fxTotal: 0,               // dinámicas disparadas en el run (solo para stats)
 })
 
 const mod = (i, n) => ((i % n) + n) % n
@@ -184,22 +220,83 @@ const applyJump = (state) => {
 
 const craterHash = (id) => [...String(id)].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
 
-// Ofertas reales como eventos de dificultad (mismo feed que las tarjetas de la
-// portada). Las posiciones se derivan por completo del estado, así que ambos
-// lados las recomputan idénticas: la traza solo lleva {step, id, value}.
-// Oferta ≥ nominal → cae un dólar del cielo; < nominal → cráter de doble salto.
+// Una oferta 'completed' (trato cerrado) pesa más que un 'attempt' (intento)
+const fxSteps = (base, status) => (status === 'completed' ? Math.round(base * 1.5) : base)
+
+// Ofertas reales del P2P como eventos de dificultad (mismo feed que las tarjetas
+// de la portada), UNA DINÁMICA POR MONEDA. Las posiciones y duraciones se derivan
+// por completo del estado + la fila de la oferta, así que ambos lados las
+// recomputan idénticas: la traza solo lleva [paso, id] y el server rellena
+// coin/value/status desde la tabla `offers`.
+//
+//   CUP      → oferta ≥ tasa: cae un dólar del cielo (obstáculo)
+//              oferta < tasa: se abre un cráter de doble salto
+//   MLC      → imán: las monedas se pegan al jugador
+//   CLASICA  → escudo: te salva de un golpe (no de caer al vacío)
+//   ETECSA   → apagón: se va la señal, pero cada moneda vale doble
+//   TROPICAL → turbo: +35% de velocidad y score doble
+//   GAS      → gravedad baja: saltos flotantes
+//   CASH     → lluvia de efectivo: ráfaga de monedas bonus en arco
+//
+// Devuelve descriptores de lo disparado para el HUD del cliente; el verificador
+// ignora el retorno (el estado ya quedó mutado igual en ambos lados).
 const applyOffers = (state, course, offers) => {
 	const nominal = course.values[course.n - 1]
+	const fired = []
 	let dollarStagger = 0
 	let craterStagger = 0
+	let cashStagger = 0
 	for (const o of offers) {
 		const value = Number(o.value) || 0
+		const status = o.status === 'completed' ? 'completed' : 'attempt'
+		const fx = FX_BY_COIN[String(o.coin || 'CUP').toUpperCase()]
+		state.fxTotal++
+
+		if (fx === 'magnet') {
+			state.magnet = Math.max(state.magnet, fxSteps(FX_MAGNET_STEPS, status))
+			fired.push({ fx, coin: 'MLC', value, steps: state.magnet })
+			continue
+		}
+		if (fx === 'blackout') {
+			state.blackout = Math.max(state.blackout, fxSteps(FX_BLACKOUT_STEPS, status))
+			fired.push({ fx, coin: 'ETECSA', value, steps: state.blackout })
+			continue
+		}
+		if (fx === 'turbo') {
+			state.turbo = Math.max(state.turbo, fxSteps(FX_TURBO_STEPS, status))
+			fired.push({ fx, coin: 'TROPICAL', value, steps: state.turbo })
+			continue
+		}
+		if (fx === 'lowgrav') {
+			state.lowgrav = Math.max(state.lowgrav, fxSteps(FX_LOWGRAV_STEPS, status))
+			fired.push({ fx, coin: 'GAS', value, steps: state.lowgrav })
+			continue
+		}
+		if (fx === 'shield') {
+			state.shield = Math.min(state.shield + 1, MAX_SHIELDS)
+			fired.push({ fx, coin: 'CLASICA', value, shields: state.shield })
+			continue
+		}
+		if (fx === 'cash') {
+			// Arco de monedas bonus delante del jugador (parábola, sin Math.sin)
+			const baseX = state.worldX + state.w * 0.95 + cashStagger
+			cashStagger += 620
+			for (let k = 0; k < CASH_COINS; k++) {
+				const t = (k - (CASH_COINS - 1) / 2) / ((CASH_COINS - 1) / 2) // -1 … 1
+				state.bonusCoins.push({ x: baseX + k * 72, dy: 75 + 80 * (1 - t * t), gain: CASH_GAIN })
+			}
+			fired.push({ fx, coin: 'CASH', value, coins: CASH_COINS })
+			continue
+		}
+
+		// CUP (y cualquier moneda sin dinámica propia): la regla original
 		if (value >= nominal) {
 			let x = state.worldX + state.w * 0.85 + dollarStagger
 			dollarStagger += 380
 			let guard = 0
 			while (holeAt(state, x) && guard++ < 20) x += 160
 			state.liveDollars.push({ x, y: -40, vy: 0, state: 'fall', groundT: 0, value })
+			fired.push({ fx: 'dollar', coin: 'CUP', value })
 		} else {
 			const wpx = DX * (2.6 + (craterHash(o.id) % 7) / 10)
 			let x0 = state.worldX + state.w + 400 + craterStagger
@@ -210,8 +307,10 @@ const applyOffers = (state, course, offers) => {
 			let guard = 0
 			while (!isClear(x0, x0 + wpx) && guard++ < 30) x0 += 160
 			state.holes.push({ x0, x1: x0 + wpx, live: { value } })
+			fired.push({ fx: 'crater', coin: 'CUP', value })
 		}
 	}
+	return fired
 }
 
 // ── Un paso de física ───────────────────────────────────────────────────────
@@ -228,7 +327,14 @@ const stepPhysics = (state, course) => {
 	const { coins, spikes } = course
 	const R = state.r
 
-	const speed = BASE_SPEED + Math.min(MAX_EXTRA_SPEED, state.elapsed * 7)
+	// Timers de las dinámicas en vivo: enteros, se descuentan al abrir el paso
+	if (state.magnet > 0) state.magnet--
+	if (state.blackout > 0) state.blackout--
+	if (state.turbo > 0) state.turbo--
+	if (state.lowgrav > 0) state.lowgrav--
+	if (state.invuln > 0) state.invuln--
+
+	const speed = (BASE_SPEED + Math.min(MAX_EXTRA_SPEED, state.elapsed * 7)) * (state.turbo > 0 ? TURBO_MULT : 1)
 	state.worldX += speed * dt
 	state.elapsed += dt
 	state.steps++
@@ -246,21 +352,43 @@ const stepPhysics = (state, course) => {
 	const hole = holeAt(state, pwx)
 	const gy = terrainY(state, course, pwx)
 
-	state.vy = Math.min(state.vy + GRAVITY * dt, 1700)
+	state.vy = Math.min(state.vy + GRAVITY * (state.lowgrav > 0 ? LOWGRAV_MULT : 1) * dt, 1700)
 	state.py += state.vy * dt
 
-	const die = () => { state.dead = true; events.push({ type: 'die' }) }
+	// El escudo de CLASICA absorbe GOLPES (pico, dólar, pared) y te devuelve al
+	// aire con medio salto e invulnerabilidad breve; caer al vacío no es un golpe.
+	// Devuelve true si el run terminó, para cortar el paso en el mismo punto.
+	const die = (kind) => {
+		if (kind === 'impact' && state.shield > 0 && state.invuln === 0) {
+			state.shield--
+			state.invuln = INVULN_STEPS
+			state.py = terrainY(state, course, pwx) - R - 4
+			state.vy = -JUMP_V * 0.8
+			state.grounded = false
+			state.jumpsLeft = 1
+			events.push({ type: 'shield', left: state.shield })
+			return false
+		}
+		state.dead = true
+		events.push({ type: 'die' })
+		return true
+	}
 
 	if (!hole && state.vy >= 0 && state.py + R >= gy) {
-		if (state.py + R > gy + 30 && state.vy > 150) { die(); return events } // chocó con la pared lejana de un hueco
-		state.py = gy - R
-		state.vy = 0
-		state.grounded = true
-		state.jumpsLeft = 2
+		// chocó con la pared lejana de un hueco
+		const slammed = state.py + R > gy + 30 && state.vy > 150 && state.invuln === 0
+		if (slammed && die('impact')) return events
+		// Si el escudo lo salvó, el rebote de rescate manda: no lo aterrices encima
+		if (!slammed) {
+			state.py = gy - R
+			state.vy = 0
+			state.grounded = true
+			state.jumpsLeft = 2
+		}
 	} else {
 		state.grounded = false
 	}
-	if (state.py - R > state.h + 60) { die(); return events } // cayó por un hueco
+	if (state.py - R > state.h + 60) { die('void'); return events } // cayó por un hueco
 
 	while (state.spikeLo < spikes.length && spikes[state.spikeLo].i * DX < pwx - 60) state.spikeLo++
 	for (let si = state.spikeLo; si < spikes.length; si++) {
@@ -273,12 +401,18 @@ const stepPhysics = (state, course) => {
 			// El falloff cuadrático calza con los flancos cóncavos de la espina
 			const frac = 1 - dx / (s.w / 2)
 			const surfY = baseY - s.h * frac * frac
-			if (state.py + R * 0.7 > surfY) { die(); return events }
+			if (state.py + R * 0.7 > surfY && state.invuln === 0) { if (die('impact')) return events }
 		}
 	}
 
 	state.comboTimer -= dt
 	if (state.comboTimer <= 0) state.combo = 1
+
+	// Radio de recogida: el imán de MLC lo ensancha; el apagón de ETECSA y el
+	// turbo de TROPICAL multiplican lo que vale cada moneda
+	const pick = R + 12 + (state.magnet > 0 ? MAGNET_RADIUS : 0)
+	const pickSq = pick * pick
+	const mult = (state.blackout > 0 ? 2 : 1) * (state.turbo > 0 ? 2 : 1)
 
 	while (state.coinLo < coins.length && coins[state.coinLo].x < pwx - 200) state.coinLo++
 	for (let ci = state.coinLo; ci < coins.length; ci++) {
@@ -288,13 +422,29 @@ const stepPhysics = (state, course) => {
 		const cy = terrainY(state, course, c.x) - c.dy
 		const dx = pwx - c.x
 		const dyp = state.py - cy
-		if (dx * dx + dyp * dyp < (R + 12) ** 2) {
+		if (dx * dx + dyp * dyp < pickSq) {
 			state.taken.add(c.id)
 			state.combo++
 			state.comboTimer = 4
-			const gain = 25 * state.combo
+			const gain = 25 * state.combo * mult
 			state.score += gain
-			events.push({ type: 'coin', combo: state.combo, gain, cy })
+			events.push({ type: 'coin', combo: state.combo, gain, cy, mult })
+		}
+	}
+
+	// Monedas bonus de la lluvia de CASH: valen fijo, no rompen ni suben el combo
+	for (let bi = state.bonusCoins.length - 1; bi >= 0; bi--) {
+		const b = state.bonusCoins[bi]
+		if (b.x < state.worldX - 300) { state.bonusCoins.splice(bi, 1); continue }
+		if (b.x > pwx + 300) continue
+		const by = terrainY(state, course, b.x) - b.dy
+		const dx = pwx - b.x
+		const dyp = state.py - by
+		if (dx * dx + dyp * dyp < pickSq) {
+			state.bonusCoins.splice(bi, 1)
+			const gain = b.gain * mult
+			state.score += gain
+			events.push({ type: 'bonus', gain, cy: by })
 		}
 	}
 
@@ -312,7 +462,7 @@ const stepPhysics = (state, course) => {
 		if (d.x < state.worldX - 250 || d.groundT > 6) { state.liveDollars.splice(i, 1); continue }
 		const dx = pwx - d.x
 		const dyp = state.py - d.y
-		if (dx * dx + dyp * dyp < (R + 17) ** 2) { die(); return events }
+		if (dx * dx + dyp * dyp < (R + 17) ** 2 && state.invuln === 0) { if (die('impact')) return events }
 	}
 	// Cráteres vivos ya cruzados: fuera del terreno local
 	for (let i = state.holes.length - 1; i >= 0; i--) {
@@ -323,21 +473,29 @@ const stepPhysics = (state, course) => {
 }
 
 // ── Replay completo (server) ────────────────────────────────────────────────
-// trace: {w, h, resizes: [[step,w,h]…], offers: [[step,id,value]…], jumps: [step…]}
+// trace: {w, h, resizes: [[step,w,h]…], offers: [[step,id]…], jumps: [step…]}
 // con los steps en orden ascendente (así los graba el cliente). En cada paso el
 // orden es resizes → ofertas → saltos → física, el mismo que usa el cliente.
-const simulateRun = (course, trace, maxSteps) => {
+//
+// La traza solo lleva el ID de cada oferta: `offerData` (Map id → {value, coin,
+// status}) lo rellena el verificador desde la tabla `offers`, así que el cliente
+// no puede inventarse ni la moneda ni el valor de un evento en vivo.
+const simulateRun = (course, trace, maxSteps, offerData) => {
 	const { w, h } = trace
 	const resizes = trace.resizes || []
 	const offers = trace.offers || []
 	const jumps = trace.jumps || []
 	const state = initSim(course, w, h)
+	const resolve = (id) => {
+		const row = offerData?.get(String(id))
+		return { id, value: row ? row.value : 0, coin: row ? row.coin : 'CUP', status: row ? row.status : 'attempt' }
+	}
 	let ri = 0, oi = 0, ji = 0
 	for (let s = 0; s < maxSteps && !state.dead && !state.won; s++) {
 		while (ri < resizes.length && resizes[ri][0] === s) { applyResize(state, resizes[ri][1], resizes[ri][2]); ri++ }
 		if (oi < offers.length && offers[oi][0] === s) {
 			const batch = []
-			while (oi < offers.length && offers[oi][0] === s) { batch.push({ id: offers[oi][1], value: offers[oi][2] }); oi++ }
+			while (oi < offers.length && offers[oi][0] === s) { batch.push(resolve(offers[oi][1])); oi++ }
 			applyOffers(state, course, batch)
 		}
 		while (ji < jumps.length && jumps[ji] === s) { applyJump(state); ji++ }
@@ -348,6 +506,7 @@ const simulateRun = (course, trace, maxSteps) => {
 
 export {
 	DX, GRAVITY, JUMP_V, BASE_SPEED, MAX_EXTRA_SPEED, STEP, STEP_HZ,
+	FX_BY_COIN, MAX_SHIELDS, MAGNET_RADIUS, TURBO_MULT,
 	mulberry32, buildCourse, initSim, terrainY, holeAt, dayAt, runStats,
 	applyResize, applyJump, applyOffers, stepPhysics, simulateRun,
 }
