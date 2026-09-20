@@ -105,6 +105,8 @@ That broke two things: "learning the CUP's history" (the stated skill of the gam
 
 A verified run's input trace is **~700 bytes gzipped even for a full 6-minute winning run**, and the server already receives it on every submit. Stored in `game_scores.trace`, re-simulating it on the frozen map reproduces that player's run exactly — that's the ghost you race. `makeGhost()` in `Game.js` steps a second sim in lockstep with yours; its `py` is in *its* screen scale, so the renderer normalises by `py / h * H`. Its live-offer obstacles are drawn translucent so its jumps make sense.
 
+Players can hide the ghost (👻 button next to the music toggle, or the `ocultar`/`mostrar` link in the start-screen chip). The preference lives in `localStorage` under `cambiocup:play:ghost` and is read through `ghostOnRef` inside the render loop, so it flips instantly mid-run. The ghost sim keeps stepping while hidden — only the drawing and the HUD distance line are skipped — so re-enabling it stays in sync.
+
 ### CUP Runner live dynamics (one per coin)
 
 The P2P feed is the game's difficulty generator. `applyOffers()` in `gameSim.js` maps each offer to an event **by coin**; a `status: 'completed'` offer lasts 1.5× longer than an `'attempt'`. All of it is deterministic state (timers are integer step counts, never seconds), so the server verifier reproduces it exactly.
@@ -206,6 +208,7 @@ Optional: `GAME_SCORE_SECRET` — HMAC secret for game run tokens (falls back to
 - **Add a live dynamic**: see *CUP Runner live dynamics* above
 - **Raise the score ceiling**: change `MAX_SCORE`/`MAX_DAY` in `api/game-score/route.js` **and** the matching CHECKs in the DB (`scripts/fix-score-caps.sql`). Changing only one side silently loses runs
 - **Render-only game code**: everything inside the `frame()` loop in `Game.js` is outside the sim, so `Math.random`/`Math.sin` are fine there — but never let a render value feed back into sim state
+- **Havana skyline**: `buildHavana()` in `Game.js` generates the strip once (seeded); `drawBuilding()` renders landmarks (Capitolio, Hotel Nacional, FOCSA, Morro, Bacardí) and three filler styles (colonial/deco/modern) plus palms. Colors come from `facade()`: pastel × sun tint by day, sky silhouette by night, blended toward the horizon by the layer's `haze`. Tweak `FACADES` for the palette, the `layer(...)` calls for haze/brightness per plane
 - **Change polling frequency**: Modify `setInterval` in the respective component (page.js=4s, FloatingOffers=3s, BackgroundLiveLine=30s)
 - **Change cron schedule**: Edit `crons` in `vercel.ts` (currently `*/10 * * * *`)
 - **Modify colors**: Edit `@theme` block in `globals.css` — custom Tailwind colors are defined there, not in a config file

@@ -10,6 +10,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 const BEST_KEY = 'cambiocup:play:best'
 const MUSIC_KEY = 'cambiocup:play:music'
 const NAME_KEY = 'cambiocup:play:name'
+const GHOST_KEY = 'cambiocup:play:ghost'
 
 // Telegram username: 5-32 chars, letters/digits/underscore, starts with a letter.
 // Returns the normalized handle ("@usuario", lowercase) or null if invalid.
@@ -421,34 +422,66 @@ const HAV_PX = 4      // tamaño del "píxel" del pixel-art
 
 const snap = (v) => Math.round(v / HAV_PX) * HAV_PX
 
+// Fachadas habaneras: pasteles desteñidos por el salitre. De día se ven tal
+// cual, teñidas por la luz del sol; de noche se apagan hacia la silueta y
+// solo quedan las ventanas encendidas.
+const FACADES = [
+	[214, 168, 96],  // ocre
+	[228, 210, 170], // crema
+	[86, 156, 148],  // verde azulado
+	[208, 128, 122], // rosa viejo
+	[116, 160, 192], // celeste
+	[150, 186, 148], // menta
+	[176, 104, 82],  // terracota
+	[166, 140, 178], // lila
+	[206, 202, 192], // blanco sucio
+]
+const TILE = [154, 78, 58]     // teja de los tejados
+const GOLD = [232, 192, 112]   // remates dorados (Bacardí)
+const TRUNK = [150, 120, 88]   // tronco de palma
+
 const buildHavana = (seed) => {
 	const rand = mulberry32(seed)
 	const items = []
+	const wins = (n, p = 0.38) => Array.from({ length: n }, () => ({ on: rand() < p, ph: rand() * 6.28 }))
 
 	// Hitos reconocibles, en posiciones fijas de la tira
-	items.push({ type: 'capitolio', x: 180, w: 190, h: 120 })
-	items.push({ type: 'nacional', x: 620, w: 150, h: 150 })
-	items.push({ type: 'morro', x: 1180, w: 46, h: 200 })
+	items.push({ type: 'capitolio', x: 180, w: 190, h: 120, pal: [206, 196, 176] })
+	items.push({ type: 'nacional', x: 620, w: 150, h: 150, pal: [226, 204, 162], win: wins(26, 0.45) })
+	items.push({ type: 'focsa', x: 900, w: 64, h: 230, pal: [160, 170, 180], win: wins(4 * 18, 0.42) })
+	items.push({ type: 'morro', x: 1180, w: 46, h: 200, pal: [198, 186, 158] })
+	items.push({ type: 'bacardi', x: 1400, w: 72, h: 170, pal: [190, 116, 82], win: wins(4 * 9, 0.4) })
 
-	// Relleno: manzanas de edificios con ventanas y tanques de agua en la azotea
+	// Relleno: manzanas de edificios. Tres estilos que conviven en cualquier
+	// calle de La Habana: colonial (portales, balcones corridos, ventanas altas),
+	// art déco (pilastras y remate escalonado) y moderno (bloques de ventanas
+	// pequeñas con el tanque de agua en la azotea).
 	const blocked = (a, b) => items.some((it) => a < it.x + it.w + 40 && b > it.x - 40)
 	let x = 0
 	while (x < HAV_SPAN) {
 		const w = snap(46 + rand() * 80)
 		if (!blocked(x, x + w)) {
-			const h = snap(40 + rand() * 90)
+			const r = rand()
+			const style = r < 0.5 ? 'colonial' : r < 0.8 ? 'modern' : 'deco'
+			const floors = style === 'modern' ? 3 + Math.floor(rand() * 6) : 2 + Math.floor(rand() * 3)
+			const floorH = style === 'colonial' ? 20 : 16
+			const cols = Math.max(1, Math.floor((w - 8) / (style === 'modern' ? 12 : 16)))
+			const r2 = rand()
 			items.push({
-				type: 'block',
-				x: snap(x), w, h,
-				tank: rand() < 0.45,
-				// Rejilla de ventanas: cuáles están encendidas y con qué desfase de parpadeo
-				win: Array.from({ length: Math.max(1, Math.floor(w / 14)) * Math.max(1, Math.floor(h / 18)) }, () => ({
-					on: rand() < 0.38,
-					ph: rand() * 6.28,
-				})),
+				type: 'block', style, x: snap(x), w, floors, floorH, cols,
+				h: snap(floors * floorH + 8),
+				pal: FACADES[Math.floor(rand() * FACADES.length)],
+				roof: r2 < 0.4 ? 'tank' : r2 < 0.65 ? 'antenna' : 'flat',
+				arcade: style === 'colonial' && rand() < 0.65,
+				win: wins(cols * floors),
 			})
 		}
-		x += w + snap(8 + rand() * 26)
+		x += w + snap(6 + rand() * 22)
+	}
+
+	// Palmas reales entre los edificios, siempre en primer plano
+	for (let k = 0; k < 7; k++) {
+		items.push({ type: 'palm', x: snap(rand() * HAV_SPAN), w: 0, h: snap(34 + rand() * 30), lean: (rand() - 0.5) * 8, pal: [74, 128, 70] })
 	}
 	return items.sort((a, b) => a.x - b.x)
 }
@@ -544,6 +577,8 @@ export default function Game() {
 	const [rank, setRank] = useState(null)
 	const [submitError, setSubmitError] = useState(null)
 	const [ghostInfo, setGhostInfo] = useState(null) // {name, score} del fantasma cargado
+	const [ghostOn, setGhostOn] = useState(true)      // ¿se dibuja el fantasma? (hay quien corre mejor sin él)
+	const ghostOnRef = useRef(true)
 	const [presence, setPresence] = useState(null)   // {live, recent}
 	const [boardTab, setBoardTab] = useState('today') // today | all
 	const playBtnRef = useRef(null)
@@ -576,6 +611,9 @@ export default function Game() {
 			const wantsMusic = localStorage.getItem(MUSIC_KEY) !== 'off'
 			setMusicOn(wantsMusic)
 			musicOnRef.current = wantsMusic
+			const wantsGhost = localStorage.getItem(GHOST_KEY) !== 'off'
+			setGhostOn(wantsGhost)
+			ghostOnRef.current = wantsGhost
 		} catch { /* first run */ }
 		const img = new Image()
 		img.src = '/cup.png'
@@ -603,6 +641,15 @@ export default function Game() {
 				setGhostInfo({ name: json.ghost.name, score: json.ghost.score, mine: json.ghost.name === me })
 			}
 		} catch { /* correr solo también vale */ }
+	}, [])
+
+	// Mostrar/ocultar el fantasma. Se lee por ref dentro del bucle de render,
+	// así que el cambio aplica al instante, también en plena partida.
+	const toggleGhost = useCallback(() => {
+		const next = !ghostOnRef.current
+		ghostOnRef.current = next
+		setGhostOn(next)
+		try { localStorage.setItem(GHOST_KEY, next ? 'on' : 'off') } catch { /* modo privado */ }
 	}, [])
 
 	// Presencia: cuánta gente está corriendo ahora mismo
@@ -799,70 +846,276 @@ export default function Game() {
 			return { sx, sy }
 		}
 
-		// Un edificio de la tira, en bloques. `dim` apaga el color según lo lejos
-		// que esté la capa; `lit` es cuánto se ven las ventanas encendidas.
-		const drawBuilding = (it, bx, baseY, body, dim, lit, t) => {
-			ctx.fillStyle = body
-			if (it.type === 'capitolio') {
-				const w = it.w, h = it.h
-				ctx.fillRect(snap(bx), snap(baseY - h * 0.55), snap(w), snap(h * 0.55))
-				// cúpula escalonada
-				const steps = 7
-				for (let k = 0; k < steps; k++) {
-					const f = k / steps
-					const dw = w * (0.42 - f * 0.34)
-					ctx.fillRect(snap(bx + w / 2 - dw / 2), snap(baseY - h * 0.55 - (k + 1) * (h * 0.06)), snap(dw), snap(h * 0.07))
-				}
-				ctx.fillRect(snap(bx + w / 2 - HAV_PX), snap(baseY - h - HAV_PX * 2), HAV_PX * 2, HAV_PX * 3)
-				return
+		// Color de una fachada bajo la luz del momento: de día es su pastel teñido
+		// por el sol (dorado al amanecer, blanco al mediodía, naranja al caer);
+		// de noche se funde con la silueta azulada. `L.haze` lo mezcla con el
+		// horizonte — perspectiva aérea: cuanto más lejos, más desvaído.
+		const facade = (pal, L, k = 1) => {
+			const { sky, haze } = L
+			const day = 1 - sky.night
+			let out = ''
+			for (let i = 0; i < 3; i++) {
+				const sunlit = pal[i] * (0.5 + 0.5 * (sky.sun[i] / 255)) * L.k * k
+				const dark = (sky.top[i] * L.darkMul + L.darkAdd) * k
+				const c = sunlit * day + dark * (1 - day)
+				out += (i ? ',' : '') + Math.round(c * (1 - haze) + sky.hor[i] * haze)
 			}
-			if (it.type === 'nacional') { // dos torres gemelas con cuerpo bajo
-				const w = it.w, h = it.h
-				ctx.fillRect(snap(bx), snap(baseY - h * 0.6), snap(w), snap(h * 0.6))
-				ctx.fillRect(snap(bx + w * 0.12), snap(baseY - h), snap(w * 0.2), snap(h * 0.4))
-				ctx.fillRect(snap(bx + w * 0.68), snap(baseY - h), snap(w * 0.2), snap(h * 0.4))
-				return
-			}
-			if (it.type === 'morro') { // faro con destello que barre
-				const w = it.w, h = it.h
-				ctx.fillRect(snap(bx), snap(baseY - h), snap(w), snap(h))
-				ctx.fillRect(snap(bx - HAV_PX), snap(baseY - h - HAV_PX * 3), snap(w + HAV_PX * 2), HAV_PX * 3)
-				const beam = (Math.sin(t * 1.1) + 1) / 2
-				ctx.fillStyle = `rgba(255, 244, 200, ${(0.3 + beam * 0.6) * lit + 0.25})`
-				ctx.fillRect(snap(bx + w / 2 - HAV_PX), snap(baseY - h - HAV_PX * 3), HAV_PX * 2, HAV_PX * 3)
-				return
-			}
-			// manzana normal
-			ctx.fillRect(snap(bx), snap(baseY - it.h), snap(it.w), snap(it.h))
-			if (it.tank) {
-				ctx.fillRect(snap(bx + it.w * 0.55), snap(baseY - it.h - HAV_PX * 3), HAV_PX * 4, HAV_PX * 3)
-			}
-			if (lit > 0.02) {
-				const cols = Math.max(1, Math.floor(it.w / 14))
-				const rows = Math.max(1, Math.floor(it.h / 18))
-				for (let c = 0; c < cols; c++) {
-					for (let r2 = 0; r2 < rows; r2++) {
-						const win = it.win[r2 * cols + c]
-						if (!win?.on) continue
-						ctx.fillStyle = `rgba(255, 214, 138, ${lit * (0.5 + 0.5 * Math.sin(t * 0.7 + win.ph)) * dim})`
-						ctx.fillRect(snap(bx + 7 + c * 14), snap(baseY - it.h + 9 + r2 * 18), HAV_PX, HAV_PX * 1.5)
-					}
-				}
+			return `rgb(${out})`
+		}
+
+		// Ventanas: de día son huecos oscuros (persianas cerradas al sol); de
+		// noche solo se ven las encendidas, cada una parpadeando a su ritmo.
+		const drawWindow = (x, y, w, h, win, L, t) => {
+			if (L.dayA > 0.02) { ctx.fillStyle = L.winDay; ctx.fillRect(x, y, w, h) }
+			if (L.lit > 0.02 && win?.on) {
+				ctx.fillStyle = `rgba(255, 214, 138, ${L.lit * (0.55 + 0.45 * Math.sin(t * 0.7 + win.ph))})`
+				ctx.fillRect(x, y, w, h)
 			}
 		}
 
-		// Una capa de ciudad, repetida en bucle y desplazada por parallax
-		const drawCity = (wx0, factor, scale, baseY, body, dim, lit, t) => {
+		// Un edificio de la tira, en bloques. La luz viene de la izquierda: el
+		// lado derecho va en sombra y las cornisas llevan un filo claro.
+		const drawBuilding = (it, bx, baseY, L, t) => {
+			const P = HAV_PX
+			const x0 = snap(bx), w = snap(it.w), h = snap(it.h), y0 = snap(baseY - h)
+			const base = facade(it.pal, L)
+			const shade = facade(it.pal, L, 0.7)
+			const trim = facade(it.pal, L, 1.2)
+			const body = (x, y, ww, hh) => { // caja con el lado derecho en sombra
+				ctx.fillStyle = base
+				ctx.fillRect(x, y, ww, hh)
+				ctx.fillStyle = shade
+				ctx.fillRect(x + ww - P, y, P, hh)
+			}
+
+			if (it.type === 'palm') {
+				const top = baseY - h
+				ctx.lineCap = 'round'
+				ctx.strokeStyle = facade(TRUNK, L)
+				ctx.lineWidth = P * 0.75
+				ctx.beginPath()
+				ctx.moveTo(x0, baseY)
+				ctx.lineTo(x0 + it.lean, top)
+				ctx.stroke()
+				ctx.strokeStyle = base
+				ctx.lineWidth = P
+				for (let k = 0; k < 6; k++) { // pencas, con un balanceo mínimo de brisa
+					const a = -Math.PI * 0.95 + k * (Math.PI * 0.9 / 5) + Math.sin(t * 0.8 + k) * 0.04
+					ctx.beginPath()
+					ctx.moveTo(x0 + it.lean, top)
+					ctx.lineTo(x0 + it.lean + Math.cos(a) * P * 4.5, top + Math.sin(a) * P * 3 + P * 2)
+					ctx.stroke()
+				}
+				ctx.lineCap = 'butt'
+				return
+			}
+
+			if (it.type === 'capitolio') {
+				// Cuerpo con columnata, pórtico central, tambor y cúpula
+				const bodyH = snap(h * 0.48)
+				body(x0, baseY - bodyH, w, bodyH)
+				ctx.fillStyle = trim
+				ctx.fillRect(x0, baseY - bodyH, w, P)
+				for (let cx = x0 + P * 2; cx < x0 + w - P * 2; cx += P * 3) ctx.fillRect(cx, baseY - bodyH + P * 2, P, bodyH - P * 3)
+				const pw = snap(w * 0.34), px0 = snap(x0 + (w - pw) / 2), ph = snap(h * 0.6)
+				body(px0, baseY - ph, pw, ph)
+				ctx.fillStyle = trim
+				for (let cx = px0 + P; cx < px0 + pw - P; cx += P * 2) ctx.fillRect(cx, baseY - ph + P * 2, P, ph - P * 3)
+				ctx.fillRect(px0 - P, baseY - ph, pw + P * 2, P)
+				// frontón escalonado
+				ctx.fillStyle = base
+				ctx.fillRect(px0 + P * 2, baseY - ph - P, pw - P * 4, P)
+				ctx.fillRect(px0 + P * 5, baseY - ph - P * 2, pw - P * 10, P)
+				// tambor con columnas
+				const dw = snap(w * 0.24), dx0 = snap(x0 + (w - dw) / 2), dh = snap(h * 0.16), dTop = baseY - ph - P * 2 - dh
+				body(dx0, dTop, dw, dh)
+				ctx.fillStyle = trim
+				for (let cx = dx0 + P; cx < dx0 + dw - P; cx += P * 2) ctx.fillRect(cx, dTop + P, P, dh - P * 2)
+				// cúpula: perfil circular en escalones
+				const steps = 8, rad = w * 0.15, domeH = h * 0.24
+				for (let k = 0; k < steps; k++) {
+					const f = (k + 0.5) / steps
+					const dwk = snap(rad * 2 * Math.sqrt(1 - f * f))
+					ctx.fillStyle = k % 2 ? base : trim
+					ctx.fillRect(snap(x0 + w / 2 - dwk / 2), snap(dTop - (k + 1) * (domeH / steps)), dwk, snap(domeH / steps) + 1)
+				}
+				// linterna
+				ctx.fillStyle = trim
+				ctx.fillRect(snap(x0 + w / 2 - P), snap(dTop - domeH - P * 3), P * 2, P * 3)
+				ctx.fillRect(snap(x0 + w / 2 - P / 2), snap(dTop - domeH - P * 5), P, P * 2)
+				return
+			}
+
+			if (it.type === 'nacional') {
+				// Cuerpo con dos plantas de arcadas y las torres gemelas con tejado
+				const bodyH = snap(h * 0.56)
+				body(x0, baseY - bodyH, w, bodyH)
+				ctx.fillStyle = trim
+				ctx.fillRect(x0, baseY - bodyH, w, P)
+				const cols = 12
+				for (let f = 0; f < 2; f++) for (let c = 0; c < cols; c++) {
+					drawWindow(snap(x0 + P * 2 + c * ((w - P * 4) / cols)), baseY - bodyH + P * 3 + f * P * 5, P, P * 3, it.win[f * cols + c], L, t)
+				}
+				const tw = snap(w * 0.2), th = h - bodyH
+				const tile = facade(TILE, L)
+				;[0.11, 0.69].forEach((fx, i) => {
+					const tx = snap(x0 + w * fx)
+					body(tx, baseY - h, tw, th)
+					ctx.fillStyle = tile
+					ctx.fillRect(tx - P, baseY - h - P, tw + P * 2, P)
+					ctx.fillRect(tx + P, baseY - h - P * 2, tw - P * 2, P)
+					ctx.fillRect(tx + P * 2, baseY - h - P * 3, tw - P * 4, P)
+					drawWindow(tx + P, baseY - h + P * 3, P, P * 2, it.win[cols * 2 + i], L, t)
+					drawWindow(tx + tw - P * 3, baseY - h + P * 3, P, P * 2, it.win[cols * 2 + i], L, t)
+				})
+				return
+			}
+
+			if (it.type === 'focsa') {
+				// La torre en Y del Vedado: espina central clara y cintas de ventanas
+				body(x0, y0, w, h)
+				ctx.fillStyle = trim
+				ctx.fillRect(snap(x0 + w * 0.46), y0, P, h)
+				const cols = 4, rows = 18
+				for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+					drawWindow(snap(x0 + P + c * ((w - P * 3) / cols)), snap(y0 + P * 3 + r * ((h - P * 5) / rows)), P * 2, P, it.win[r * cols + c], L, t)
+				}
+				ctx.fillStyle = shade
+				ctx.fillRect(snap(x0 + w * 0.3), y0 - P * 2, snap(w * 0.4), P * 2) // caseta
+				ctx.fillRect(snap(x0 + w * 0.5), y0 - P * 6, 2, P * 4) // antena
+				return
+			}
+
+			if (it.type === 'morro') {
+				// Muralla con almenas, torre que se estrecha por tramos y el farol
+				const wallW = snap(w * 3.2), wallH = snap(h * 0.16), wx0 = snap(x0 - w * 1.1)
+				body(wx0, baseY - wallH, wallW, wallH)
+				ctx.fillStyle = trim
+				for (let cx = wx0; cx < wx0 + wallW; cx += P * 2) ctx.fillRect(cx, baseY - wallH - P, P, P)
+				const seg = (from, to, sw) => {
+					const ww = snap(w * sw), sx = snap(x0 + (w - ww) / 2)
+					body(sx, snap(baseY - h * to), ww, snap(h * (to - from)) + 1)
+					ctx.fillStyle = trim
+					ctx.fillRect(sx - P, snap(baseY - h * to), ww + P * 2, P)
+				}
+				seg(0, 0.38, 1)
+				seg(0.38, 0.7, 0.82)
+				seg(0.7, 0.9, 0.66)
+				const lw = snap(w * 0.6), lx = snap(x0 + (w - lw) / 2), ly = snap(baseY - h), lh = snap(h * 0.08)
+				const pulse = (Math.sin(t * 1.1) + 1) / 2
+				body(lx - P, ly, lw + P * 2, lh) // la sala del farol, con el cristal encendido dentro
+				ctx.fillStyle = `rgba(255, 236, 170, ${0.1 + (0.2 + pulse * 0.45) * L.lit})`
+				ctx.fillRect(lx, ly + P / 2, lw, lh - P)
+				ctx.fillStyle = shade
+				ctx.fillRect(lx - P * 2, ly - P, lw + P * 4, P)
+				ctx.fillRect(snap(x0 + w / 2 - P / 2), ly - P * 3, P, P * 2)
+				if (L.lit > 0.05) { // el haz barre la bahía, solo de noche
+					const a = t * 0.9
+					const cx = x0 + w / 2, cy = ly + lh / 2, len = 240 * (w / 46)
+					ctx.fillStyle = `rgba(255, 244, 200, ${0.14 * L.lit * (0.5 + 0.5 * Math.cos(a))})`
+					ctx.beginPath()
+					ctx.moveTo(cx, cy)
+					ctx.lineTo(cx + Math.cos(a) * len, cy + Math.sin(a) * len * 0.35 - 18)
+					ctx.lineTo(cx + Math.cos(a) * len, cy + Math.sin(a) * len * 0.35 + 18)
+					ctx.closePath()
+					ctx.fill()
+				}
+				return
+			}
+
+			if (it.type === 'bacardi') {
+				// Art déco: pilastras verticales, remate escalonado en terracota y
+				// oro, y la torre con su murciélago
+				const bodyH = snap(h * 0.62)
+				body(x0, baseY - bodyH, w, bodyH)
+				ctx.fillStyle = trim
+				for (let cx = x0 + P; cx < x0 + w - P; cx += P * 4) ctx.fillRect(cx, baseY - bodyH, P, bodyH)
+				const cols = 4
+				for (let f = 0; f < 9; f++) for (let c = 0; c < cols; c++) {
+					if (P * 2 + f * 16 + P * 2 > bodyH) continue
+					drawWindow(snap(x0 + P * 2 + c * P * 4), baseY - bodyH + P * 2 + f * 16, P * 2, P * 2, it.win[f * cols + c], L, t)
+				}
+				const gold = facade(GOLD, L)
+				let prev = 0.62
+				for (const [sw, to] of [[0.84, 0.72], [0.62, 0.82], [0.4, 0.9]]) {
+					const ww = snap(w * sw), sx = snap(x0 + (w - ww) / 2)
+					body(sx, snap(baseY - h * to), ww, snap(h * (to - prev)) + 1)
+					ctx.fillStyle = gold
+					ctx.fillRect(sx, snap(baseY - h * to), ww, P)
+					prev = to
+				}
+				body(snap(x0 + w / 2 - P * 2), snap(baseY - h), P * 4, snap(h * 0.1) + 1)
+				ctx.fillStyle = gold
+				ctx.fillRect(snap(x0 + w / 2 - P * 2), snap(baseY - h), P * 4, P)
+				ctx.fillRect(snap(x0 + w / 2 - P * 1.5), snap(baseY - h - P), P * 3, P)
+				return
+			}
+
+			// Manzana normal
+			body(x0, y0, w, h)
+			ctx.fillStyle = trim
+			ctx.fillRect(x0, y0, w, P) // cornisa
+			if (it.style === 'deco') { // remate escalonado y pilastras
+				ctx.fillStyle = base
+				ctx.fillRect(x0 + P * 2, y0 - P * 2, w - P * 4, P * 2)
+				ctx.fillStyle = trim
+				ctx.fillRect(x0 + P * 2, y0 - P * 2, w - P * 4, P)
+				ctx.fillRect(snap(x0 + w / 2 - P), y0 - P * 4, P * 2, P * 2)
+				ctx.fillStyle = shade
+				for (let cx = x0 + P * 2; cx < x0 + w - P * 2; cx += P * 4) ctx.fillRect(cx, y0 + P, P, h - P * 2)
+			}
+			const winW = it.style === 'modern' ? P * 2 : P
+			const winH = it.style === 'colonial' ? P * 3 : it.style === 'deco' ? P * 2 : P
+			const colW = (w - P * 2) / it.cols
+			for (let f = 0; f < it.floors; f++) {
+				if (it.arcade && f === it.floors - 1) break // la planta baja es el portal
+				const fy = y0 + P * 2 + f * it.floorH
+				for (let c = 0; c < it.cols; c++) {
+					drawWindow(snap(x0 + P + c * colW + (colW - winW) / 2), fy, winW, winH, it.win[f * it.cols + c], L, t)
+				}
+				if (it.style === 'colonial' && f < it.floors - 1) { // balcón corrido
+					ctx.fillStyle = shade
+					ctx.fillRect(x0 + P, fy + winH, w - P * 2, P)
+				}
+			}
+			if (it.arcade) { // portales con columnas en la planta baja
+				const ah = P * 4
+				ctx.fillStyle = shade
+				ctx.fillRect(x0, baseY - ah, w, ah)
+				ctx.fillStyle = trim
+				for (let cx = x0 + P; cx < x0 + w - P; cx += P * 3) ctx.fillRect(cx, baseY - ah, P, ah)
+			}
+			if (it.roof === 'tank') { // tanque de agua sobre patas
+				const tx = snap(x0 + w * 0.6)
+				ctx.fillStyle = shade
+				ctx.fillRect(tx, y0 - P * 3, P * 3, P * 2)
+				ctx.fillRect(tx, y0 - P, P, P)
+				ctx.fillRect(tx + P * 2, y0 - P, P, P)
+				ctx.fillStyle = trim
+				ctx.fillRect(tx, y0 - P * 4, P * 3, P)
+			} else if (it.roof === 'antenna') {
+				const ax = snap(x0 + w * 0.3)
+				ctx.fillStyle = shade
+				ctx.fillRect(ax + 1, y0 - P * 5, 2, P * 5)
+				ctx.fillRect(ax - P, y0 - P * 4, P * 3, 2)
+				ctx.fillRect(ax - P / 2, y0 - P * 3, P * 2, 2)
+			}
+		}
+
+		// Una capa de ciudad, repetida en bucle y desplazada por parallax. Los
+		// edificios van primero y las palmas después, para que queden delante.
+		const drawCity = (wx0, factor, scale, baseY, L, t) => {
 			const shift = wx0 * factor
 			const span = HAV_SPAN * scale
 			const start = Math.floor(shift / span) - 1
-			for (let rep = start; rep < start + Math.ceil(W / span) + 2; rep++) {
-				for (const it of HAVANA) {
-					const bx = rep * span + it.x * scale - shift
-					if (bx > W + 220 || bx + it.w * scale < -220) continue
-					drawBuilding(
-						{ ...it, w: it.w * scale, h: it.h * scale }, bx, baseY, body, dim, lit, t,
-					)
+			for (let pass = 0; pass < 2; pass++) {
+				for (let rep = start; rep < start + Math.ceil(W / span) + 2; rep++) {
+					for (const it of HAVANA) {
+						if ((it.type === 'palm') !== (pass === 1)) continue
+						const bx = rep * span + it.x * scale - shift
+						if (bx > W + 220 || bx + it.w * scale < -220) continue
+						drawBuilding({ ...it, w: it.w * scale, h: it.h * scale }, bx, baseY, L, t)
+					}
 				}
 			}
 		}
@@ -1129,10 +1382,16 @@ export default function Game() {
 				ctx.globalAlpha = 1
 			}
 
-			// La Habana en dos planos: cuanto más cerca, más oscura y más rápida.
-			// Ambas nacen en el horizonte y crecen hacia el cielo.
-			drawCity(worldX, 0.08, 0.8, HOR + 1, rgb(sky.top.map((c) => Math.round(c * 1.7 + 16)), 0.85), 0.5, sky.night * 0.45, elapsed)
-			drawCity(worldX, 0.16, 1.0, HOR + 3, rgb(sky.top.map((c) => Math.round(c * 1.1 + 5)), 0.95), 0.85, sky.night * 0.9, elapsed + 40)
+			// La Habana en dos planos: la lejana, desvaída por la calima y más
+			// lenta; la cercana con sus colores y más rápida. Ambas nacen en el
+			// horizonte y crecen hacia el cielo.
+			const dayA = 1 - sky.night
+			const layer = (k, haze, darkMul, darkAdd, lit) => ({
+				sky, k, haze, darkMul, darkAdd, lit, dayA,
+				winDay: `rgba(12, 16, 30, ${(0.5 * dayA * (1 - haze)).toFixed(3)})`,
+			})
+			drawCity(worldX, 0.08, 0.8, HOR + 1, layer(0.7, 0.45, 1.7, 16, sky.night * 0.45), elapsed)
+			drawCity(worldX, 0.16, 1.0, HOR + 3, layer(0.86, 0.12, 1.1, 5, sky.night * 0.9), elapsed + 40)
 
 			// Cámara: sacudidas por golpes y cráteres. Todo el mundo se dibuja
 			// dentro de este translate; el HUD queda fuera para que no tiemble.
@@ -1532,7 +1791,7 @@ export default function Game() {
 			// Fantasma: el rival del día, translúcido. Se dibujan también SUS cráteres
 			// y dólares en vivo (los que enfrentó él, no tú) para que se entienda por
 			// qué salta donde salta.
-			if (ghost && !ghost.done) {
+			if (ghost && !ghost.done && ghostOnRef.current) {
 				const g = ghost.state
 				const gx = g.worldX + g.px - worldX   // mundo → mi pantalla
 				const gy = (g.py / g.h) * H           // su pantalla → la mía
@@ -1715,7 +1974,7 @@ export default function Game() {
 			audio.setMusicMood({ turbo: turboOn, blackout: blackoutOn })
 
 			// Distancia al fantasma: lo único que necesitas saber es si vas delante
-			if (ghost) {
+			if (ghost && ghostOnRef.current) {
 				const lead = (worldX + PX) - (ghost.state.worldX + ghost.state.px)
 				const ahead = lead >= 0
 				const days = Math.abs(lead) / DX * ((totalDays || 1) / n)
@@ -1965,6 +2224,20 @@ export default function Game() {
 				</button>
 			)}
 
+			{/* Fantasma: hay quien prefiere correr sin el rival encima. Se apaga de
+			    un toque, también en plena partida, y se recuerda. */}
+			{ghostInfo && status !== 'loading' && status !== 'error' && (
+				<button
+					type="button"
+					aria-label={ghostOn ? 'Ocultar fantasma' : 'Mostrar fantasma'}
+					aria-pressed={ghostOn}
+					onClick={(e) => { e.stopPropagation(); toggleGhost() }}
+					className={`absolute bottom-4 right-16 z-30 flex size-10 items-center justify-center rounded-full liquid-glass liquid-glass--dark text-base transition-all active:scale-90 ${ghostOn ? '' : 'opacity-50 grayscale'}`}
+				>
+					👻
+				</button>
+			)}
+
 			{status === 'loading' && (
 				<div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
 					<div className="size-8 animate-spin rounded-full border-2 border-malachite-500 border-t-transparent" />
@@ -2080,10 +2353,24 @@ export default function Game() {
 					<div className="flex flex-col items-center gap-2">
 						{ghostInfo && (
 							<p className="rounded-full liquid-glass liquid-glass--dark px-4 py-1.5 text-xs text-white/75">
-								👻 Corres contra {ghostInfo.mine
-									? <><strong className="text-white">tu récord de hoy</strong></>
-									: <><strong className="text-white">{ghostInfo.name}</strong></>}
-								{' — '}<span className="tabular-nums font-bold text-[#ffd75e]">{ghostInfo.score.toLocaleString('es')}</span>
+								{ghostOn ? (
+									<>
+										👻 Corres contra {ghostInfo.mine
+											? <><strong className="text-white">tu récord de hoy</strong></>
+											: <><strong className="text-white">{ghostInfo.name}</strong></>}
+										{' — '}<span className="tabular-nums font-bold text-[#ffd75e]">{ghostInfo.score.toLocaleString('es')}</span>
+									</>
+								) : (
+									<>👻 Fantasma oculto</>
+								)}
+								{' · '}
+								<button
+									type="button"
+									onClick={toggleGhost}
+									className="font-bold text-white/60 underline underline-offset-2 transition-colors hover:text-white"
+								>
+									{ghostOn ? 'ocultar' : 'mostrar'}
+								</button>
 							</p>
 						)}
 						{presence?.live > 0 && (
