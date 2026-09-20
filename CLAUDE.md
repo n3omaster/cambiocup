@@ -63,11 +63,13 @@ app/
     └── webhook/route.js        # POST → save new offer (type, status, value, coin)
 lib/
 ├── supabase.js                # Supabase client + all DB operations
+├── gameDay.js                 # Daily map freeze: Havana-midnight cutoff + `mapDay` id (handles Cuba's DST, where local midnight doesn't exist one night a year)
 ├── gameToken.js               # Server-only HMAC run tokens for the game (issue/verify)
 └── gameHistory.js             # getBucketedHistory(coinId, asOf): parallel pagination past the 1000-row cap, buckets to ~2000 points
 scripts/
 ├── harden-game-rls.sql        # Paste-into-Supabase script: drops all game_scores RLS policies (service_role-only access)
-└── fix-score-caps.sql         # Paste-into-Supabase: raises the score_cap/day_cap CHECKs and adds flag_reason. REQUIRED — without it any run over 500k points 500s and is lost
+├── fix-score-caps.sql         # Paste-into-Supabase: raises the score_cap/day_cap CHECKs and adds flag_reason. REQUIRED — without it any run over 500k points 500s and is lost
+└── add-daily-map-ghosts.sql   # Paste-into-Supabase: map_day + trace columns, presence table. Needed for the daily board, ghosts and the live player count
 colors.js                      # Color palettes (malachite, crimson, delft_blue, ghost_white, yale_blue)
 vercel.ts                      # Vercel config (@vercel/config): cron for /api/cron every 10 min
 ```
@@ -80,12 +82,28 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 | `/api/cron` | GET | — | Fetches 6 coins from QvaPay, saves averages + fixed GAS price to DB (coins answering no data are skipped) |
 | `/api/offers` | GET | — | Returns offers created in last 2 minutes |
 | `/api/history` | GET | `coin`, `days` | Returns `{data: [{time, value}], coin}` — `time` is a unix timestamp in seconds |
-| `/api/game-history` | GET | `coin` | Full history for `/play` via `lib/gameHistory.js`. Returns `{data, coin, rev}` — `rev` identifies the exact snapshot so the server can rebuild the same map at verify time. Edge-cached 1h |
+| `/api/game-history` | GET | `coin` | Full history for `/play` via `lib/gameHistory.js`, **frozen at Havana midnight**. Returns `{data, coin, rev, mapDay}`. Edge-cached until the next daily cutoff |
+| `/api/game-ghost` | GET | `self`, `exclude` | Best verified run on today's frozen map, with its input trace and resolved offers — the rival you race against |
+| `/api/presence` | GET / POST | POST: `{id, day, score}` | Live player count (`{live, recent}`). Clients beat every 20s while running |
 | `/api/game-score` | GET / POST | POST: `{t, d}` (token + scrambled payload) | Game leaderboard. GET returns `{top: [best score per player, max 10], runs}` (flagged rows excluded); POST re-simulates the submitted input trace and saves the run (see Anti-cheat below). Sanity caps are `MAX_SCORE` 15M / `MAX_DAY` 20000 — they only exist to avoid re-simulating absurd claims, since the replay checks the score exactly. **They must stay in sync with the `score_cap`/`day_cap` CHECKs on the table** |
 | `/api/game-token` | GET | — | Issues a signed run token (`base64url({t,n}).hmac`) when a run starts; its age proves the run's real duration at submit time. Max age 30 min |
 | `/api/og` | GET | `coin` | Generates dynamic Open Graph image with current rate and trend |
 | `/api/og/play` | GET | — | OG card for the game: real CUP terrain (last 60 days), spike, current rate. Edge-cached 1h |
 | `/api/webhook` | POST | `{type, status, value, coin}` | Validates and saves a new offer |
+
+### The daily frozen map (and why it matters)
+
+`buildCourse()` classifies spikes and holes while consuming a **shared PRNG stream**, so a single reclassification desynchronises every later `rand()` call and re-rolls the whole map. Since the cron appends a row every 10 minutes, the course used to change constantly — measured: only **17 of 62 spikes** survived from one hour to the next, and 7 of 62 across a week.
+
+That broke two things: "learning the CUP's history" (the stated skill of the game) was pointless because the map moved on its own, and the leaderboard compared runs played on different courses.
+
+`lib/gameDay.js` fixes it by cutting the history at **Havana midnight**: `/api/game-history` always snapshots the same instant for a whole game day, so everyone playing today races the identical track. This is also what makes ghosts and the daily board possible at all. Gotchas:
+- Havana DST means local midnight **doesn't exist** one night a year (00:00 jumps to 01:00) — `havanaMidnightMs()` nudges forward to the first real instant of the day.
+- At the end of a game day the snapshot is ~24h old (25h on the DST night), so `REV_MAX_AGE_MS` is 36h. Don't lower it back.
+
+### Ghosts
+
+A verified run's input trace is **~700 bytes gzipped even for a full 6-minute winning run**, and the server already receives it on every submit. Stored in `game_scores.trace`, re-simulating it on the frozen map reproduces that player's run exactly — that's the ghost you race. `makeGhost()` in `Game.js` steps a second sim in lockstep with yours; its `py` is in *its* screen scale, so the renderer normalises by `py / h * H`. Its live-offer obstacles are drawn translucent so its jumps make sense.
 
 ### CUP Runner live dynamics (one per coin)
 
@@ -130,7 +148,11 @@ The game's score submission is verified by **deterministic re-simulation**, not 
 - `id`, `type` ('buy'|'sell'), `status` ('attempt'|'completed'), `value` (float), `coin` (string), `created_at`
 
 **`game_scores` table** — CUP Runner leaderboard (one row per finished run):
-- `id`, `name` (Telegram handle, normalized `@lowercase`), `score` (int), `day` (int), `flagged` (bool, honeypot rows — excluded from all reads), `flag_reason` (text, why it was flagged — null when clean), `nonce` (text, run-token nonce; partial unique index makes tokens single-use), `created_at`
+- `id`, `name` (Telegram handle, normalized `@lowercase`), `score` (int), `day` (int), `flagged` (bool, honeypot rows — excluded from all reads), `flag_reason` (text, why it was flagged — null when clean), `nonce` (text, run-token nonce; partial unique index makes tokens single-use), `map_day` (date, which frozen map it was played on), `trace` (jsonb, input trace — verified runs only, powers ghosts), `created_at`
+- `saveGameScore` retries without the newer columns on PGRST204/42703, so a deploy that lands before its migration loses the extras but never the run
+
+**`presence` table** — who is running right now:
+- `id` (client-generated session id), `last_seen`, `day`, `score`. Alive = seen in the last 45s; rows older than 10 min are swept on read
 - **CHECK constraints `score_cap` / `day_cap` mirror `MAX_SCORE`/`MAX_DAY` in `api/game-score/route.js` and must be changed together.** They used to be 500000/10000 — below the game's real ceiling — so every run past ~day 483 was thrown away (the API 400'd before the row was ever attempted). `scripts/fix-score-caps.sql` raises them; if you see error `23514` on insert, that script hasn't been run
 - Index on `score desc`. `scripts/harden-game-rls.sql` drops all RLS policies so only `service_role` (which bypasses RLS) can touch the table — all access goes through `/api/game-score`. The Telegram @ is used to contact weekly winners
 - Inspect cheaters with `select name, score, day, flag_reason, created_at from game_scores where flagged order by created_at desc`, and triage verification failures with `select flag_reason, count(*) from game_scores where flagged group by 1 order by 2 desc`
@@ -142,6 +164,8 @@ Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders ne
 | Component | Endpoint | Interval |
 |---|---|---|
 | Home page (`page.js`) | `/api` | 4 seconds |
+| Game presence heartbeat | `/api/presence` (POST) | 20 seconds (while running) |
+| Presence counter | `/api/presence` (GET) | 15 seconds |
 | FloatingOffers | `/api/offers` | 3 seconds |
 | BackgroundLiveLine | `/api/history` | 30 seconds |
 | Game (during a run) | `/api/offers` | 3 seconds (live difficulty events) |

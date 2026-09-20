@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
-import { saveGameScore, getTopScores, countScoresAbove, countGameRuns, getOffersByIds } from '@/lib/supabase'
+import { saveGameScore, getTopScores, getTopScoresForDay, countScoresAbove, countGameRuns, getOffersByIds } from '@/lib/supabase'
 import { verifyToken } from '@/lib/gameToken'
 import { decodePayload } from '@/app/utils/gameCodec'
 import { buildCourse, simulateRun, STEP_HZ } from '@/app/utils/gameSim'
 import { getBucketedHistory } from '@/lib/gameHistory'
+import { currentMapCutoff } from '@/lib/gameDay'
 
 // Telegram username: 5-32 chars, letters/digits/underscore, starts with a letter
 const TG_RE = /^[a-zA-Z][a-zA-Z0-9_]{4,31}$/
@@ -30,7 +31,10 @@ const MAX_TOKEN_AGE_S = 60 * 60
 // firma el token: ese tiempo NO cuenta como `elapsed`, así que en una conexión
 // lenta un run legítimo parecía durar más que su propio token. 5 s se quedaban
 // cortos en móvil cubano — de ahí buena parte de los runs honesty-flagged.
-const REV_MAX_AGE_MS = 26 * 3600 * 1000
+// El mapa se congela a medianoche de La Habana, así que al final del día su rev
+// ya tiene ~24 h (y hasta 25 h la noche del cambio de horario). 36 h deja
+// margen para eso más el edge-cache, sin abrir la puerta a revivir mapas viejos.
+const REV_MAX_AGE_MS = 36 * 3600 * 1000
 const SIM_SLACK_S = 20
 const OFFER_WINDOW_MS = 5 * 60 * 1000
 const MAX_JUMPS = 5000
@@ -101,30 +105,51 @@ const verifyRunInner = async ({ run, rev, score, day, tok, elapsed }) => {
 	if (!result.died && !result.won) return fail('never-ended')
 	if (result.score !== score) return fail(`score-mismatch:${result.score}`)
 	if (result.day !== day) return fail(`day-mismatch:${result.day}`)
-	if (result.steps < MIN_ELAPSED_S * STEP_HZ) return fail('too-short')
+	// Mínimo simbólico: solo descarta trazas degeneradas. Un run honesto puede
+	// durar un segundo — medido en producción, 14 de 15 rechazos de un día eran
+	// jugadores reales muriendo en el día 3 con 0 puntos. Contra el submit
+	// instantáneo protege la edad del token (MIN_ELAPSED_S), no esto.
+	if (result.steps < 30) return fail('too-short')
 	if (result.steps / STEP_HZ > elapsed + SIM_SLACK_S) return fail('too-long')
 
 	return { ok: true }
 }
 
-// GET → leaderboard: top 10 (best score per player) + total runs
-export async function GET() {
-
-	const [{ data, error }, { count }] = await Promise.all([getTopScores(100), countGameRuns()])
-
-	if (error) { console.error('Error fetching leaderboard:', error); return NextResponse.json({ top: [], runs: 0 }) }
-
+// Mejor marca por jugador, en orden
+const bestPerPlayer = (rows, max = 10) => {
 	const seen = new Set()
 	const top = []
-	for (const row of data || []) {
+	for (const row of rows || []) {
 		const key = row.name.toLowerCase()
 		if (seen.has(key)) continue
 		seen.add(key)
 		top.push(row)
-		if (top.length === 10) break
+		if (top.length === max) break
 	}
+	return top
+}
 
-	return NextResponse.json({ top, runs: count || 0 })
+// GET → leaderboard: histórico (todos los tiempos) + el del DÍA de hoy.
+// El del día es el único estrictamente justo: el mapa se congela a medianoche,
+// así que todas esas partidas corrieron la misma pista. El histórico se queda
+// porque nadie debe perder su récord, pero mezcla mapas distintos.
+export async function GET() {
+
+	const { day } = currentMapCutoff()
+	const [allTime, today, { count }] = await Promise.all([
+		getTopScores(100),
+		getTopScoresForDay(day, 100),
+		countGameRuns(),
+	])
+
+	if (allTime.error) { console.error('Error fetching leaderboard:', allTime.error); return NextResponse.json({ top: [], today: [], runs: 0, mapDay: day }) }
+
+	return NextResponse.json({
+		top: bestPerPlayer(allTime.data),
+		today: bestPerPlayer(today.data),
+		mapDay: day,
+		runs: count || 0,
+	})
 }
 
 // POST → save a run, return the global rank.
@@ -169,6 +194,7 @@ export async function POST(request) {
 		let flagged = true
 		let reason = 'plain-body'
 		let nonce = null
+		let trace = null
 
 		if (envelope) {
 			const tok = verifyToken(body.t)
@@ -183,14 +209,21 @@ export async function POST(request) {
 			else if (score > 500 * elapsed * elapsed + 20000) reason = 'score-rate'
 			else {
 				const verdict = await verifyRun({ run: raw.run, rev: Number(raw.rev), score, day, tok, elapsed })
-				if (verdict.ok) { flagged = false; reason = null; nonce = tok.n }
-				else reason = verdict.reason
+				if (verdict.ok) {
+					flagged = false
+					reason = null
+					nonce = tok.n
+					// La traza verificada es el fantasma: ~700 B comprimida, y con el
+					// mapa del día reproduce la partida exacta
+					trace = raw.run
+				} else reason = verdict.reason
 			}
 		}
 
 		if (flagged) console.warn(`[game-score] flagged ${name} score=${score} day=${day} reason=${reason}`)
 
-		const { error } = await saveGameScore(name, score, day, flagged, nonce, reason)
+		const { day: mapDay } = currentMapCutoff()
+		const { error } = await saveGameScore(name, score, day, flagged, nonce, reason, mapDay, trace)
 		// 23505 = nonce already used (a replayed request): skip the save but keep
 		// the fake success so replays learn nothing
 		if (error && error.code !== '23505') {

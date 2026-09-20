@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 // La física vive en app/utils/gameSim.js (paso fijo STEP, compartida con el
 // verificador de replays del server); aquí quedan render, audio e inputs.
 const BEST_KEY = 'cambiocup:play:best'
+const MUSIC_KEY = 'cambiocup:play:music'
 const NAME_KEY = 'cambiocup:play:name'
 
 // Telegram username: 5-32 chars, letters/digits/underscore, starts with a letter.
@@ -103,8 +104,117 @@ const createAudio = () => {
 		src.start(t0)
 	}
 
+	// ── Música: son cubano generado, 0 bytes de descarga ────────────────────
+	// Nada de MP3: en Cuba los datos son caros y una pista en bucle son ~300 KB.
+	// Esto son osciladores, así que además puede reaccionar al juego (acelera con
+	// el turbo de TROPICAL, se enturbia con el apagón de ETECSA).
+	//
+	// Las notas se agendan con el reloj de AudioContext y una ventana de
+	// anticipación; con setTimeout por nota se desincronizaría en cuanto el
+	// navegador estrangule la pestaña.
+	let music = null
+
+	// Clave son 3-2, la columna vertebral del son: |x..x..x.|..x.x...|
+	const CLAVE = [0, 3, 6, 10, 12]
+	const BASS = [   // tumbao: fundamental, quinta y octava
+		[0, 55.00], [3, 82.41], [6, 55.00], [8, 73.42],
+		[16, 49.00], [19, 73.42], [22, 49.00], [24, 65.41],
+	]
+	const MONTUNO = [[2, [261.63, 329.63]], [6, [293.66, 349.23]], [18, [246.94, 329.63]], [22, [261.63, 329.63]]]
+
+	const tone = (t0, freq, dur, { type = 'sine', vol = 0.06, glide = 1 } = {}) => {
+		const ac = ctx
+		const osc = ac.createOscillator()
+		const gain = ac.createGain()
+		osc.type = type
+		osc.frequency.setValueAtTime(freq, t0)
+		if (glide !== 1) osc.frequency.exponentialRampToValueAtTime(freq * glide, t0 + dur)
+		gain.gain.setValueAtTime(0.0001, t0)
+		gain.gain.exponentialRampToValueAtTime(vol, t0 + 0.012)
+		gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur)
+		osc.connect(gain).connect(music.bus)
+		osc.start(t0)
+		osc.stop(t0 + dur + 0.02)
+	}
+
+	// Golpe de clave: ruido corto y seco filtrado en agudo (suena a madera)
+	const woodblock = (t0, vol) => {
+		const ac = ctx
+		const len = Math.floor(ac.sampleRate * 0.05)
+		const buf = ac.createBuffer(1, len, ac.sampleRate)
+		const ch = buf.getChannelData(0)
+		for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 3
+		const src = ac.createBufferSource()
+		src.buffer = buf
+		const bp = ac.createBiquadFilter()
+		bp.type = 'bandpass'
+		bp.frequency.value = 2100
+		bp.Q.value = 6
+		const g = ac.createGain()
+		g.gain.value = vol
+		src.connect(bp).connect(g).connect(music.bus)
+		src.start(t0)
+	}
+
+	const startMusic = () => {
+		const ac = ensure()
+		if (!ac || music) return
+		const bus = ac.createGain()
+		bus.gain.value = 0
+		// Filtro que se cierra durante el apagón de ETECSA
+		const tone_ = ac.createBiquadFilter()
+		tone_.type = 'lowpass'
+		tone_.frequency.value = 12000
+		bus.connect(tone_).connect(ac.destination)
+		music = { bus, filter: tone_, next: 0, step: 0, bpm: 92, timer: 0, target: 0.5 }
+		bus.gain.linearRampToValueAtTime(0.5, ac.currentTime + 1.5)
+
+		// Planificador: cada 50 ms agenda lo que entra en los próximos 200 ms
+		music.timer = setInterval(() => {
+			if (!music) return
+			const spb = 60 / music.bpm / 4 // duración de un dieciseisavo
+			if (music.next < ac.currentTime) music.next = ac.currentTime + 0.05
+			while (music.next < ac.currentTime + 0.2) {
+				const k = music.step % 32
+				if (CLAVE.includes(k % 16) && k < 16) woodblock(music.next, 0.14)
+				if (k === 20 || k === 26) woodblock(music.next, 0.11)
+				for (const [at, f] of BASS) if (at === k) tone(music.next, f, spb * 2.6, { type: 'triangle', vol: 0.075 })
+				for (const [at, ch] of MONTUNO) {
+					if (at !== k) continue
+					for (const f of ch) tone(music.next, f, spb * 1.6, { type: 'square', vol: 0.022 })
+				}
+				music.next += spb
+				music.step++
+			}
+		}, 50)
+	}
+
+	const stopMusic = () => {
+		if (!music) return
+		clearInterval(music.timer)
+		const ac = ctx
+		try {
+			music.bus.gain.cancelScheduledValues(ac.currentTime)
+			music.bus.gain.setValueAtTime(music.bus.gain.value, ac.currentTime)
+			music.bus.gain.linearRampToValueAtTime(0.0001, ac.currentTime + 0.35)
+		} catch { /* contexto cerrado */ }
+		music = null
+	}
+
 	return {
 		preload,
+		startMusic,
+		stopMusic,
+		// El son sigue al juego: acelera con el turbo y se apaga con ETECSA
+		setMusicMood: ({ turbo = false, blackout = false } = {}) => {
+			if (!music || !ctx) return
+			music.bpm = turbo ? 124 : 92
+			const want = blackout ? 620 : 12000
+			if (Math.abs(music.filter.frequency.value - want) > 50) {
+				music.filter.frequency.setTargetAtTime(want, ctx.currentTime, 0.18)
+			}
+		},
+		musicOn: () => !!music,
 		// Real coin flick; the double jump replays it faster/brighter
 		jump: () => {
 			if (!playBuffer('jump', { vol: 0.45 })) blip({ from: 320, to: 750, dur: 0.12 })
@@ -298,6 +408,125 @@ function Confetti() {
 	)
 }
 
+// ── La Habana en 8 bits ─────────────────────────────────────────────────────
+// Perfil de la ciudad como fondo de parallax, dibujado con bloques alineados a
+// una rejilla de píxeles gordos. Es pura decoración: vive fuera de la sim, así
+// que aquí sí valen Math.random/Math.sin (nunca al revés — ningún valor de
+// render puede volver al estado de la simulación).
+//
+// La tira se genera UNA vez con semilla fija y se repite en bucle; así el
+// skyline es estable (no parpadea) y no cuesta nada por frame.
+const HAV_SPAN = 1600 // ancho de la tira que se repite, en px de mundo
+const HAV_PX = 4      // tamaño del "píxel" del pixel-art
+
+const snap = (v) => Math.round(v / HAV_PX) * HAV_PX
+
+const buildHavana = (seed) => {
+	const rand = mulberry32(seed)
+	const items = []
+
+	// Hitos reconocibles, en posiciones fijas de la tira
+	items.push({ type: 'capitolio', x: 180, w: 190, h: 120 })
+	items.push({ type: 'nacional', x: 620, w: 150, h: 150 })
+	items.push({ type: 'morro', x: 1180, w: 46, h: 200 })
+
+	// Relleno: manzanas de edificios con ventanas y tanques de agua en la azotea
+	const blocked = (a, b) => items.some((it) => a < it.x + it.w + 40 && b > it.x - 40)
+	let x = 0
+	while (x < HAV_SPAN) {
+		const w = snap(46 + rand() * 80)
+		if (!blocked(x, x + w)) {
+			const h = snap(40 + rand() * 90)
+			items.push({
+				type: 'block',
+				x: snap(x), w, h,
+				tank: rand() < 0.45,
+				// Rejilla de ventanas: cuáles están encendidas y con qué desfase de parpadeo
+				win: Array.from({ length: Math.max(1, Math.floor(w / 14)) * Math.max(1, Math.floor(h / 18)) }, () => ({
+					on: rand() < 0.38,
+					ph: rand() * 6.28,
+				})),
+			})
+		}
+		x += w + snap(8 + rand() * 26)
+	}
+	return items.sort((a, b) => a.x - b.x)
+}
+
+const HAVANA = buildHavana(0x484241)
+
+// Paleta del cielo a lo largo del run: amanece, se hace de día, atardece sobre
+// el Malecón y cae la noche justo cuando llegas a HOY. Se mantiene oscura a
+// propósito — la línea verde del CUP tiene que seguir siendo lo más legible.
+const SKY = [
+	{ at: 0.00, top: [7, 8, 15], hor: [17, 20, 40], glow: [70, 60, 140], sun: [150, 160, 210], night: 1 },
+	{ at: 0.16, top: [18, 22, 46], hor: [120, 62, 58], glow: [225, 130, 80], sun: [255, 190, 120], night: 0.5 },
+	{ at: 0.30, top: [20, 34, 62], hor: [186, 110, 62], glow: [255, 170, 100], sun: [255, 222, 160], night: 0.15 },
+	{ at: 0.40, top: [18, 36, 68], hor: [196, 152, 112], glow: [210, 190, 150], sun: [255, 244, 210], night: 0.05 },
+	{ at: 0.50, top: [16, 38, 70], hor: [52, 104, 142], glow: [110, 180, 224], sun: [255, 250, 226], night: 0 },
+	{ at: 0.72, top: [30, 20, 52], hor: [206, 86, 46], glow: [255, 122, 77], sun: [255, 176, 96], night: 0.2 },
+	{ at: 0.86, top: [18, 12, 34], hor: [104, 42, 54], glow: [190, 80, 90], sun: [255, 140, 110], night: 0.65 },
+	{ at: 1.00, top: [7, 10, 16], hor: [14, 36, 24], glow: [46, 174, 92], sun: [200, 240, 214], night: 1 },
+]
+
+const lerpStops = (stops, t) => {
+	let a = stops[0], b = stops[stops.length - 1]
+	for (let i = 0; i < stops.length - 1; i++) {
+		if (t >= stops[i].at && t <= stops[i + 1].at) { a = stops[i]; b = stops[i + 1]; break }
+	}
+	const k = b.at === a.at ? 0 : (t - a.at) / (b.at - a.at)
+	const mixArr = (p, q) => p.map((c, i) => Math.round(c + (q[i] - c) * k))
+	return {
+		top: mixArr(a.top, b.top),
+		hor: mixArr(a.hor, b.hor),
+		glow: mixArr(a.glow, b.glow),
+		sun: mixArr(a.sun, b.sun),
+		night: a.night + (b.night - a.night) * k,
+	}
+}
+
+// Fantasma: re-simula la partida de otra persona en paralelo a la tuya, paso a
+// paso. Solo es posible porque el mapa está congelado por día (lib/gameDay.js),
+// así que su traza y la tuya corren exactamente la misma pista.
+//
+// Su `py` está en la escala de SU pantalla (terrainY depende de state.h), por
+// eso se devuelve normalizado y el render lo multiplica por la altura actual.
+const makeGhost = (course, ghost) => {
+	if (!ghost?.run?.jumps) return null
+	const { run, offers } = ghost
+	const w = run.w, h = run.h
+	if (!Number.isFinite(w) || !Number.isFinite(h)) return null
+	const state = initSim(course, w, h)
+	const jumps = run.jumps || []
+	const evts = run.offers || []
+	const resizes = run.resizes || []
+	let ji = 0, oi = 0, ri = 0, step = 0
+	return {
+		name: ghost.name,
+		score: ghost.score,
+		state,
+		get done() { return state.dead || state.won },
+		// Avanza un paso de física, aplicando sus inputs en el mismo orden que el
+		// verificador del server (resizes → ofertas → saltos → física)
+		step() {
+			if (state.dead || state.won) return
+			while (ri < resizes.length && resizes[ri][0] === step) { applyResize(state, resizes[ri][1], resizes[ri][2]); ri++ }
+			if (oi < evts.length && evts[oi][0] === step) {
+				const batch = []
+				while (oi < evts.length && evts[oi][0] === step) {
+					const row = offers?.[String(evts[oi][1])]
+					batch.push({ id: evts[oi][1], value: row?.value ?? 0, coin: row?.coin ?? 'CUP', status: row?.status ?? 'attempt' })
+					oi++
+				}
+				applyOffers(state, course, batch)
+			}
+			while (ji < jumps.length && jumps[ji] === step) { applyJump(state); ji++ }
+			stepPhysics(state, course)
+			step++
+		},
+	}
+}
+
 export default function Game() {
 
 	const canvasRef = useRef(null)
@@ -314,6 +543,13 @@ export default function Game() {
 	const [board, setBoard] = useState(null) // {top: [...], runs}
 	const [rank, setRank] = useState(null)
 	const [submitError, setSubmitError] = useState(null)
+	const [ghostInfo, setGhostInfo] = useState(null) // {name, score} del fantasma cargado
+	const [presence, setPresence] = useState(null)   // {live, recent}
+	const [boardTab, setBoardTab] = useState('today') // today | all
+	const playBtnRef = useRef(null)
+	const [playOffscreen, setPlayOffscreen] = useState(false) // ¿se salió de vista el botón de jugar?
+	const [musicOn, setMusicOn] = useState(false)
+	const musicOnRef = useRef(false)
 	const submittedRef = useRef(false) // one submission per death
 	const runTokenRef = useRef(null) // signed run token, issued at takeoff (anti-cheat)
 	const runTokenPromiseRef = useRef(null) // in-flight token fetch — awaited at submit so fast deaths don't race it
@@ -322,6 +558,8 @@ export default function Game() {
 	// empezaste a correr le regala tu latencia de red al reloj — en conexiones
 	// lentas eso mandaba runs honestos al honeypot.
 	const spareTokenRef = useRef(null) // {token, at}
+	const ghostRef = useRef(null)      // partida del rival a batir hoy (traza + ofertas)
+	const clientIdRef = useRef(null)   // id de sesión para el contador de presencia
 	const revRef = useRef(null) // snapshot id de la historia usada para el course (anti-cheat)
 	const traceRef = useRef(null) // traza del run (saltos/ofertas/resizes por paso) — el server la re-simula
 
@@ -334,6 +572,10 @@ export default function Game() {
 			// Only accept a stored name if it's a valid Telegram handle (older saves may predate the @ format)
 			const savedName = normalizeTg(localStorage.getItem(NAME_KEY))
 			if (savedName) { setPlayerName(savedName); setNameDraft(savedName.slice(1)) }
+			// La música solo arranca dentro de una partida, nunca al abrir la página
+			const wantsMusic = localStorage.getItem(MUSIC_KEY) !== 'off'
+			setMusicOn(wantsMusic)
+			musicOnRef.current = wantsMusic
 		} catch { /* first run */ }
 		const img = new Image()
 		img.src = '/cup.png'
@@ -346,6 +588,31 @@ export default function Game() {
 		[],
 	)
 
+	// Fantasma del día: tu propio récord si ya jugaste hoy, si no el del líder
+	const loadGhost = useCallback(async () => {
+		try {
+			const me = normalizeTg(localStorage.getItem(NAME_KEY))
+			let res = me ? await fetch(`/api/game-ghost?self=${encodeURIComponent(me)}`) : null
+			let json = res?.ok ? await res.json() : null
+			if (!json?.ghost) {
+				res = await fetch(`/api/game-ghost${me ? `?exclude=${encodeURIComponent(me)}` : ''}`)
+				json = res.ok ? await res.json() : null
+			}
+			if (json?.ghost) {
+				ghostRef.current = json.ghost
+				setGhostInfo({ name: json.ghost.name, score: json.ghost.score, mine: json.ghost.name === me })
+			}
+		} catch { /* correr solo también vale */ }
+	}, [])
+
+	// Presencia: cuánta gente está corriendo ahora mismo
+	const fetchPresence = useCallback(async () => {
+		try {
+			const res = await fetch('/api/presence')
+			if (res.ok) setPresence(await res.json())
+		} catch { /* decoración */ }
+	}, [])
+
 	const fetchBoard = useCallback(async () => {
 		try {
 			const res = await fetch('/api/game-score')
@@ -355,6 +622,21 @@ export default function Game() {
 
 	// setBoard ocurre tras un await, no es síncrono (ver nota del efecto de arriba)
 	useEffect(() => { fetchBoard() }, [fetchBoard])
+
+	// Contador de gente jugando: se refresca cada 15 s, y el latido que alimenta
+	// ese contador se manda desde el motor mientras hay una partida en curso
+	useEffect(() => {
+		if (!clientIdRef.current) {
+			try {
+				clientIdRef.current = localStorage.getItem('cambiocup:play:cid')
+					|| `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+				localStorage.setItem('cambiocup:play:cid', clientIdRef.current)
+			} catch { clientIdRef.current = `c${Math.random().toString(36).slice(2, 12)}` }
+		}
+		fetchPresence()
+		const poll = setInterval(fetchPresence, 15000)
+		return () => clearInterval(poll)
+	}, [fetchPresence])
 
 	// Load the real CUP history (full series, bucketed server-side)
 	useEffect(() => {
@@ -374,6 +656,8 @@ export default function Game() {
 				setStatus('ready')
 				// Deja un token listo antes de que toquen "jugar"
 				fetchToken().then((token) => { if (token) spareTokenRef.current = { token, at: Date.now() } })
+				// Y el fantasma del día: la mejor partida verificada sobre ESTE mismo mapa
+				loadGhost()
 			} catch (err) {
 				console.error('Error loading game data:', err)
 				if (!cancelled) setStatus('error')
@@ -381,7 +665,7 @@ export default function Game() {
 		}
 		load()
 		return () => { cancelled = true }
-	}, [fetchToken])
+	}, [fetchToken, loadGhost])
 
 	// ── Engine ──────────────────────────────────────────────────────────────
 	useEffect(() => {
@@ -392,6 +676,7 @@ export default function Game() {
 		if (!audioRef.current) audioRef.current = createAudio()
 		const audio = audioRef.current
 		audio.preload() // fetch + decode the real coin recordings (no-op after the first run)
+		if (musicOnRef.current) audio.startMusic()
 
 		// Anti-cheat: el run va firmado con un token cuya edad prueba cuánto duró de
 		// verdad. Se usa el que ya estaba pedido (así su reloj arranca ANTES que el
@@ -432,6 +717,21 @@ export default function Game() {
 		state = initSim(course, W, H)
 		trace = { w: W, h: H, resizes: [], offers: [], jumps: [] }
 
+		// Rival del día, corriendo la misma pista congelada en paralelo
+		const ghost = makeGhost(course, ghostRef.current)
+
+		// Latido de presencia mientras dure la partida (alimenta "N corriendo ahora")
+		const beat = () => {
+			fetch('/api/presence', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ id: clientIdRef.current, day: runStatsDay(), score: Math.round(state.score) }),
+			}).catch(() => { /* best-effort */ })
+		}
+		const runStatsDay = () => dayAt(course, Math.floor((state.worldX + state.px) / DX))
+		beat()
+		const beatPoll = setInterval(beat, 20000)
+
 		const terrainY = (wx) => simTerrainY(state, course, wx)
 		const holeAt = (wx) => simHoleAt(state, wx)
 
@@ -464,28 +764,108 @@ export default function Game() {
 			})
 		}
 
-		// El cielo viaja por las eras de la historia: el color de fondo avanza con
-		// el día, así que se NOTA que estás cruzando tres años de tasa del CUP
+		// El cielo recorre un día entero a lo largo del run: amanece al principio de
+		// la historia, atardece sobre el Malecón y cae la noche justo al llegar a
+		// HOY. Además de bonito, es una barra de progreso que no hay que leer.
 		const totalDays = dayAt(course, n - 1)
-		const ERAS = [
-			{ at: 0.00, sky: [13, 12, 24], glow: [88, 46, 140] },
-			{ at: 0.34, sky: [10, 15, 26], glow: [26, 96, 146] },
-			{ at: 0.68, sky: [20, 14, 13], glow: [152, 76, 32] },
-			{ at: 1.00, sky: [9, 19, 14], glow: [36, 150, 78] },
-		]
-		const eraColor = (t) => {
-			let a = ERAS[0], b = ERAS[ERAS.length - 1]
-			for (let i = 0; i < ERAS.length - 1; i++) {
-				if (t >= ERAS[i].at && t <= ERAS[i + 1].at) { a = ERAS[i]; b = ERAS[i + 1]; break }
+		const ERAS_UNUSED = null
+
+		const rgb = (c, alpha) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${alpha})`
+
+		// Sol / luna: arco sobre el horizonte según el avance del run
+		const drawSunMoon = (sky, t) => {
+			const isMoon = sky.night > 0.55
+			const arc = Math.min(1, Math.max(0, (t - 0.06) / 0.88))
+			const sx = W * (0.08 + arc * 0.84)
+			const sy = H * 0.62 - Math.sin(arc * Math.PI) * H * 0.42
+			const r = isMoon ? 13 : 19
+			const halo = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 6)
+			halo.addColorStop(0, rgb(sky.sun, 0.5))
+			halo.addColorStop(0.35, rgb(sky.glow, 0.16))
+			halo.addColorStop(1, rgb(sky.glow, 0))
+			ctx.fillStyle = halo
+			ctx.fillRect(sx - r * 6, sy - r * 6, r * 12, r * 12)
+			ctx.fillStyle = rgb(sky.sun, 0.95)
+			ctx.beginPath()
+			ctx.arc(sx, sy, r, 0, Math.PI * 2)
+			ctx.fill()
+			if (isMoon) { // muerde la luna para que sea creciente
+				ctx.globalCompositeOperation = 'destination-out'
+				ctx.beginPath()
+				ctx.arc(sx + r * 0.55, sy - r * 0.3, r * 0.92, 0, Math.PI * 2)
+				ctx.fill()
+				ctx.globalCompositeOperation = 'source-over'
 			}
-			const k = b.at === a.at ? 0 : (t - a.at) / (b.at - a.at)
-			const mix = (p, q) => Math.round(p + (q - p) * k)
-			return {
-				sky: a.sky.map((c, i) => mix(c, b.sky[i])),
-				glow: a.glow.map((c, i) => mix(c, b.glow[i])),
+			return { sx, sy }
+		}
+
+		// Un edificio de la tira, en bloques. `dim` apaga el color según lo lejos
+		// que esté la capa; `lit` es cuánto se ven las ventanas encendidas.
+		const drawBuilding = (it, bx, baseY, body, dim, lit, t) => {
+			ctx.fillStyle = body
+			if (it.type === 'capitolio') {
+				const w = it.w, h = it.h
+				ctx.fillRect(snap(bx), snap(baseY - h * 0.55), snap(w), snap(h * 0.55))
+				// cúpula escalonada
+				const steps = 7
+				for (let k = 0; k < steps; k++) {
+					const f = k / steps
+					const dw = w * (0.42 - f * 0.34)
+					ctx.fillRect(snap(bx + w / 2 - dw / 2), snap(baseY - h * 0.55 - (k + 1) * (h * 0.06)), snap(dw), snap(h * 0.07))
+				}
+				ctx.fillRect(snap(bx + w / 2 - HAV_PX), snap(baseY - h - HAV_PX * 2), HAV_PX * 2, HAV_PX * 3)
+				return
+			}
+			if (it.type === 'nacional') { // dos torres gemelas con cuerpo bajo
+				const w = it.w, h = it.h
+				ctx.fillRect(snap(bx), snap(baseY - h * 0.6), snap(w), snap(h * 0.6))
+				ctx.fillRect(snap(bx + w * 0.12), snap(baseY - h), snap(w * 0.2), snap(h * 0.4))
+				ctx.fillRect(snap(bx + w * 0.68), snap(baseY - h), snap(w * 0.2), snap(h * 0.4))
+				return
+			}
+			if (it.type === 'morro') { // faro con destello que barre
+				const w = it.w, h = it.h
+				ctx.fillRect(snap(bx), snap(baseY - h), snap(w), snap(h))
+				ctx.fillRect(snap(bx - HAV_PX), snap(baseY - h - HAV_PX * 3), snap(w + HAV_PX * 2), HAV_PX * 3)
+				const beam = (Math.sin(t * 1.1) + 1) / 2
+				ctx.fillStyle = `rgba(255, 244, 200, ${(0.3 + beam * 0.6) * lit + 0.25})`
+				ctx.fillRect(snap(bx + w / 2 - HAV_PX), snap(baseY - h - HAV_PX * 3), HAV_PX * 2, HAV_PX * 3)
+				return
+			}
+			// manzana normal
+			ctx.fillRect(snap(bx), snap(baseY - it.h), snap(it.w), snap(it.h))
+			if (it.tank) {
+				ctx.fillRect(snap(bx + it.w * 0.55), snap(baseY - it.h - HAV_PX * 3), HAV_PX * 4, HAV_PX * 3)
+			}
+			if (lit > 0.02) {
+				const cols = Math.max(1, Math.floor(it.w / 14))
+				const rows = Math.max(1, Math.floor(it.h / 18))
+				for (let c = 0; c < cols; c++) {
+					for (let r2 = 0; r2 < rows; r2++) {
+						const win = it.win[r2 * cols + c]
+						if (!win?.on) continue
+						ctx.fillStyle = `rgba(255, 214, 138, ${lit * (0.5 + 0.5 * Math.sin(t * 0.7 + win.ph)) * dim})`
+						ctx.fillRect(snap(bx + 7 + c * 14), snap(baseY - it.h + 9 + r2 * 18), HAV_PX, HAV_PX * 1.5)
+					}
+				}
 			}
 		}
-		const rgb = (c, alpha) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${alpha})`
+
+		// Una capa de ciudad, repetida en bucle y desplazada por parallax
+		const drawCity = (wx0, factor, scale, baseY, body, dim, lit, t) => {
+			const shift = wx0 * factor
+			const span = HAV_SPAN * scale
+			const start = Math.floor(shift / span) - 1
+			for (let rep = start; rep < start + Math.ceil(W / span) + 2; rep++) {
+				for (const it of HAVANA) {
+					const bx = rep * span + it.x * scale - shift
+					if (bx > W + 220 || bx + it.w * scale < -220) continue
+					drawBuilding(
+						{ ...it, w: it.w * scale, h: it.h * scale }, bx, baseY, body, dim, lit, t,
+					)
+				}
+			}
+		}
 
 		// Silueta lejana: la MISMA curva del CUP repetida a otra escala y otra
 		// velocidad. El fondo no es decoración genérica, es el propio gráfico.
@@ -584,6 +964,7 @@ export default function Game() {
 		const endRun = (won) => {
 			if (finished) return
 			finished = true
+			audio.stopMusic()
 			if (won) audio.win()
 			else audio.death()
 			cancelAnimationFrame(raf)
@@ -679,6 +1060,7 @@ export default function Game() {
 			acc += dt
 			while (acc >= STEP) {
 				acc -= STEP
+				if (ghost) ghost.step() // mismo número de pasos que el jugador: van a la par
 				for (const ev of stepPhysics(state, course)) { if (onSimEvent(ev)) return }
 			}
 
@@ -693,39 +1075,64 @@ export default function Game() {
 			if (trail.length > 14) trail.shift()
 
 			// ── Draw ──
-			// Cielo de la era actual: el color avanza con el día, de los morados de
-			// 2023 al verde de hoy
-			const era = eraColor(Math.min(1, dayAt(course, Math.floor(pwx / DX)) / totalDays))
-			const bg = ctx.createLinearGradient(0, 0, 0, H)
-			bg.addColorStop(0, rgb(era.sky, 1))
-			bg.addColorStop(1, `rgb(${Math.round(era.sky[0] * 0.6)}, ${Math.round(era.sky[1] * 0.6)}, ${Math.round(era.sky[2] * 0.6)})`)
+			// Progreso del run = hora del día. Amanece en 2023, atardece sobre el
+			// Malecón y es de noche cuando cruzas la bandera de HOY.
+			const prog = Math.min(1, dayAt(course, Math.floor(pwx / DX)) / totalDays)
+			const sky = lerpStops(SKY, prog)
+			// La línea del CUP vive entre 0,38·H y 0,72·H. La ciudad arranca justo ahí
+			// y CRECE HACIA ARRIBA, de modo que el terreno cercano le tapa la base
+			// (que es exactamente lo que hace la profundidad) en vez de quedar
+			// dibujada por debajo del gráfico.
+			const HOR = H * 0.6
+
+			const bg = ctx.createLinearGradient(0, 0, 0, HOR)
+			bg.addColorStop(0, rgb(sky.top, 1))
+			bg.addColorStop(1, rgb(sky.hor, 1))
 			ctx.fillStyle = bg
-			ctx.fillRect(0, 0, W, H)
+			ctx.fillRect(0, 0, W, HOR)
+			ctx.fillStyle = rgb(sky.top.map((c) => Math.round(c * 0.55)), 1)
+			ctx.fillRect(0, HOR, W, H - HOR)
 
-			// Resplandor de la era, anclado al horizonte
-			const glow = ctx.createRadialGradient(W * 0.62, H * 0.52, 0, W * 0.62, H * 0.52, Math.max(W, H) * 0.75)
-			glow.addColorStop(0, rgb(era.glow, blackoutOn ? 0.05 : 0.17))
-			glow.addColorStop(0.55, rgb(era.glow, 0.05))
-			glow.addColorStop(1, rgb(era.glow, 0))
-			ctx.fillStyle = glow
-			ctx.fillRect(0, 0, W, H)
-
-			ctx.fillStyle = '#ffffff'
-			for (const st of stars) {
-				const span = W * 1.5
-				const sx = ((st.x * span - worldX * 0.06) % span + span) % span - W * 0.25
-				ctx.globalAlpha = st.a * (0.6 + 0.4 * Math.sin(elapsed * 1.6 + st.x * 30))
-				ctx.beginPath()
-				ctx.arc(sx, st.y * H, st.r, 0, Math.PI * 2)
-				ctx.fill()
+			// Estrellas: solo de noche, se apagan al amanecer
+			if (sky.night > 0.05) {
+				ctx.fillStyle = '#ffffff'
+				for (const st of stars) {
+					const span = W * 1.5
+					const sx = ((st.x * span - worldX * 0.06) % span + span) % span - W * 0.25
+					ctx.globalAlpha = st.a * sky.night * (0.6 + 0.4 * Math.sin(elapsed * 1.6 + st.x * 30))
+					ctx.beginPath()
+					ctx.arc(sx, st.y * HOR, st.r, 0, Math.PI * 2)
+					ctx.fill()
+				}
+				ctx.globalAlpha = 1
 			}
-			ctx.globalAlpha = 1
 
-			// Cordilleras de parallax: la misma curva del CUP, más lejos y más lenta
-			// Por encima del horizonte: el terreno cercano las tapa cuando sube, que es
-			// justo la sensación de profundidad que se busca
-			ridge(worldX, 0.10, 0.20, 0.56, rgb(era.glow, 0.13))
-			ridge(worldX, 0.26, 0.26, 0.67, rgb(era.glow, 0.2))
+			const orb = blackoutOn ? null : drawSunMoon(sky, prog)
+
+			// Cordillera lejana: la MISMA curva del CUP a otra escala — el gráfico
+			// también es el fondo
+			ridge(worldX, 0.06, 0.16, 0.60, rgb(sky.glow, 0.1))
+
+			// Mar del Malecón: banda estrecha bajo la ciudad, con el reflejo del astro
+			const sea = ctx.createLinearGradient(0, HOR, 0, H)
+			sea.addColorStop(0, rgb(sky.hor.map((c) => Math.round(c * 0.6)), 1))
+			sea.addColorStop(1, rgb(sky.top.map((c) => Math.round(c * 0.5)), 1))
+			ctx.fillStyle = sea
+			ctx.fillRect(0, HOR, W, H - HOR)
+			if (orb && orb.sy < HOR) {
+				ctx.globalAlpha = 0.22
+				ctx.fillStyle = rgb(sky.sun, 1)
+				for (let k = 0; k < 6; k++) {
+					const rw = snap(54 - k * 7 + Math.sin(elapsed * 1.7 + k) * 9)
+					ctx.fillRect(snap(orb.sx - rw / 2), snap(HOR + 6 + k * 8), rw, HAV_PX)
+				}
+				ctx.globalAlpha = 1
+			}
+
+			// La Habana en dos planos: cuanto más cerca, más oscura y más rápida.
+			// Ambas nacen en el horizonte y crecen hacia el cielo.
+			drawCity(worldX, 0.08, 0.8, HOR + 1, rgb(sky.top.map((c) => Math.round(c * 1.7 + 16)), 0.85), 0.5, sky.night * 0.45, elapsed)
+			drawCity(worldX, 0.16, 1.0, HOR + 3, rgb(sky.top.map((c) => Math.round(c * 1.1 + 5)), 0.95), 0.85, sky.night * 0.9, elapsed + 40)
 
 			// Cámara: sacudidas por golpes y cráteres. Todo el mundo se dibuja
 			// dentro de este translate; el HUD queda fuera para que no tiemble.
@@ -1122,6 +1529,54 @@ export default function Game() {
 				}
 			}
 
+			// Fantasma: el rival del día, translúcido. Se dibujan también SUS cráteres
+			// y dólares en vivo (los que enfrentó él, no tú) para que se entienda por
+			// qué salta donde salta.
+			if (ghost && !ghost.done) {
+				const g = ghost.state
+				const gx = g.worldX + g.px - worldX   // mundo → mi pantalla
+				const gy = (g.py / g.h) * H           // su pantalla → la mía
+				if (gx > -140 && gx < W + 140) {
+					ctx.globalAlpha = 0.3
+					for (const h of g.holes) {
+						if (!h.live) continue
+						const a = h.x0 - worldX, b = h.x1 - worldX
+						if (b < -60 || a > W + 60) continue
+						ctx.strokeStyle = '#8ab4ff'
+						ctx.lineWidth = 2
+						ctx.setLineDash([4, 6])
+						ctx.beginPath()
+						ctx.moveTo(a, terrainY(h.x0 - 1))
+						ctx.lineTo(b, terrainY(h.x1 + 1))
+						ctx.stroke()
+						ctx.setLineDash([])
+					}
+					for (const d of g.liveDollars) {
+						const dx2 = d.x - worldX
+						if (dx2 < -60 || dx2 > W + 60) continue
+						ctx.fillStyle = '#8ab4ff'
+						roundedRect(ctx, dx2 - 18, (d.y / g.h) * H - 10, 36, 20, 4)
+						ctx.fill()
+					}
+					// El corredor
+					ctx.globalAlpha = 0.42
+					ctx.fillStyle = '#9ec6ff'
+					ctx.shadowColor = '#7ab8ff'
+					ctx.shadowBlur = 14
+					ctx.beginPath()
+					ctx.arc(gx, gy, R, 0, Math.PI * 2)
+					ctx.fill()
+					ctx.shadowBlur = 0
+					ctx.globalAlpha = 0.85
+					ctx.fillStyle = '#cfe2ff'
+					ctx.font = `700 11px ${MONO}`
+					ctx.textAlign = 'center'
+					ctx.textBaseline = 'alphabetic'
+					ctx.fillText(ghost.name, gx, gy - R - 10)
+					ctx.globalAlpha = 1
+				}
+			}
+
 			// Player: sombra + trail + moneda real de 1 peso (public/cup.png) rodando
 			{
 				const gy = terrainY(pwx)
@@ -1257,6 +1712,24 @@ export default function Game() {
 			ctx.textAlign = 'right'
 			ctx.fillText('ø fechas ocultas hasta que caigas', W - 16, 32)
 
+			audio.setMusicMood({ turbo: turboOn, blackout: blackoutOn })
+
+			// Distancia al fantasma: lo único que necesitas saber es si vas delante
+			if (ghost) {
+				const lead = (worldX + PX) - (ghost.state.worldX + ghost.state.px)
+				const ahead = lead >= 0
+				const days = Math.abs(lead) / DX * ((totalDays || 1) / n)
+				ctx.textAlign = 'left'
+				ctx.fillStyle = ghost.done ? 'rgba(255,255,255,0.4)' : ahead ? '#53dd6c' : '#7ab8ff'
+				ctx.font = `700 12px ${mono}`
+				ctx.fillText(
+					ghost.done
+						? `👻 ${ghost.name} cayó — ${ghost.score.toLocaleString('es')}`
+						: `👻 ${ghost.name} · ${ahead ? '▲ le sacas' : '▼ te saca'} ${days < 1 ? '<1' : Math.round(days)} día${Math.round(days) === 1 ? '' : 's'}`,
+					20, 126,
+				)
+			}
+
 			// Fichas de dinámicas activas: icono + barra de cuenta atrás. Sin esto
 			// el jugador no sabe cuánto le queda de imán, turbo o apagón.
 			const chips = []
@@ -1327,6 +1800,8 @@ export default function Game() {
 		return () => {
 			cancelAnimationFrame(raf)
 			clearInterval(offerPoll)
+			clearInterval(beatPoll)
+			audio.stopMusic()
 			window.removeEventListener('resize', resize)
 			window.removeEventListener('keydown', onKey)
 			canvas.removeEventListener('pointerdown', onPointer)
@@ -1431,6 +1906,21 @@ export default function Game() {
 		if (status === 'dead' && death && playerName) submitScore(playerName)
 	}, [status, death, playerName, submitScore])
 
+	// El botón flotante de abajo solo aparece cuando el de arriba ya no se ve;
+	// si no, en pantallas altas salían dos JUGAR a la vez
+	useEffect(() => {
+		const el = playBtnRef.current
+		if (status !== 'ready' || !el || typeof IntersectionObserver === 'undefined') { setPlayOffscreen(false); return }
+		// Ojo: `isIntersecting` es true con que asome un píxel, así que el umbral
+		// sería decorativo. Lo que decide es la proporción visible.
+		const io = new IntersectionObserver(
+			([entry]) => setPlayOffscreen(entry.intersectionRatio < 0.55),
+			{ threshold: [0, 0.55, 1] },
+		)
+		io.observe(el)
+		return () => io.disconnect()
+	}, [status])
+
 	const restart = useCallback(() => {
 		if (share) URL.revokeObjectURL(share.url)
 		setShare(null)
@@ -1445,9 +1935,35 @@ export default function Game() {
 	const tgHref = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`
 	const xHref = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`
 
+	// `touch-none` solo durante la partida: en las pantallas de inicio y de muerte
+	// bloqueaba el gesto de desplazar, y con el overlay sin scroll el botón de
+	// JUGAR quedaba literalmente fuera de alcance en un móvil.
 	return (
-		<div className="fixed inset-0 h-dvh w-full overflow-hidden bg-[#0b0c10] text-white select-none touch-none">
+		<div className={`fixed inset-0 h-dvh w-full overflow-hidden bg-[#0b0c10] text-white select-none ${status === 'playing' ? 'touch-none' : 'touch-auto'}`}>
 			<canvas ref={canvasRef} className="absolute inset-0 size-full" />
+
+			{/* Silencio: la música es un son generado en el propio navegador, sin
+			    descarga. Tiene que poder apagarse de un toque y recordarlo. */}
+			{status !== 'loading' && status !== 'error' && (
+				<button
+					type="button"
+					aria-label={musicOn ? 'Silenciar música' : 'Activar música'}
+					onClick={(e) => {
+						e.stopPropagation()
+						const next = !musicOn
+						setMusicOn(next)
+						musicOnRef.current = next
+						try { localStorage.setItem(MUSIC_KEY, next ? 'on' : 'off') } catch { /* modo privado */ }
+						if (audioRef.current) {
+							if (next && status === 'playing') audioRef.current.startMusic()
+							else audioRef.current.stopMusic()
+						}
+					}}
+					className="absolute bottom-4 right-4 z-30 flex size-10 items-center justify-center rounded-full liquid-glass liquid-glass--dark text-base transition-transform active:scale-90"
+				>
+					{musicOn ? '🔊' : '🔇'}
+				</button>
+			)}
 
 			{status === 'loading' && (
 				<div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
@@ -1464,7 +1980,8 @@ export default function Game() {
 			)}
 
 			{status === 'ready' && (
-				<div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-6 bg-black/40 p-6 text-center">
+				<div className="absolute inset-0 z-10 overflow-y-auto overscroll-contain bg-black/40">
+				 <div className="flex min-h-full flex-col items-center justify-center gap-5 p-6 pb-28 text-center">
 					<div>
 						<p className="text-sm font-bold tracking-[0.3em] text-malachite-500 mb-2">CAMBIOCUP PRESENTA</p>
 						<h1 className="text-4xl sm:text-6xl font-extrabold tracking-tighter">
@@ -1478,12 +1995,32 @@ export default function Game() {
 						doble salto; los <strong>huecos</strong> de las caídas, calcula bien la distancia.
 						Sobrevive hasta la <strong className="text-malachite-500">bandera de HOY 🏁</strong> y ganas.
 					</p>
-					<div className="max-w-md">
-						<p className="text-xs sm:text-sm text-white/50">
-							💸 Las ofertas <strong className="text-white/80">reales</strong> del mercado P2P entran
-							al juego <span className="text-malachite-500 font-bold">EN VIVO</span>, y
-							<strong className="text-white/80"> cada moneda dispara lo suyo</strong>:
+
+					{/* Jugar va ANTES que la leyenda y el ranking: es lo que vienes a hacer */}
+					<button
+						ref={playBtnRef}
+						type="button"
+						onClick={() => setStatus('playing')}
+						className="rounded-full bg-malachite-500 px-10 py-3.5 text-lg font-extrabold text-black shadow-[0_0_40px_rgba(83,221,108,0.45)] hover:scale-105 active:scale-95 transition-transform"
+					>
+						▶ JUGAR
+					</button>
+
+					{best && (
+						<p className="rounded-full liquid-glass liquid-glass--dark px-4 py-1.5 text-xs sm:text-sm text-white/80 tabular-nums">
+							🏆 Tu récord: {best.score.toLocaleString('es')} CUP — día {best.day}
 						</p>
+					)}
+
+					{/* La leyenda es larga: plegada por defecto en móvil, que no empuje
+					    el resto de la pantalla fuera de la vista */}
+					<details className="group max-w-md text-left" open={typeof window !== 'undefined' && window.innerWidth >= 640}>
+						<summary className="cursor-pointer list-none text-center text-xs sm:text-sm text-white/50 marker:content-none">
+							💸 Las ofertas <strong className="text-white/80">reales</strong> del P2P entran
+							al juego <span className="text-malachite-500 font-bold">EN VIVO</span>, y
+							<strong className="text-white/80"> cada moneda dispara lo suyo</strong>
+							<span className="ml-1 inline-block text-white/40 transition-transform group-open:rotate-180">▾</span>
+						</summary>
 						<ul className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1.5 text-left text-[11px] sm:text-xs text-white/60 sm:grid-cols-2">
 							{LIVE_FX_LEGEND.map((fx) => (
 								<li key={fx.coin} className="flex items-start gap-2">
@@ -1495,44 +2032,92 @@ export default function Game() {
 								</li>
 							))}
 						</ul>
-					</div>
-					{best && (
-						<p className="rounded-full liquid-glass liquid-glass--dark px-4 py-1.5 text-xs sm:text-sm text-white/80 tabular-nums">
-							🏆 Tu récord: {best.score.toLocaleString('es')} CUP — día {best.day}
-						</p>
-					)}
-					{board?.top?.length > 0 && (
+					</details>
+					{/* El mapa se congela a medianoche de La Habana, así que el ranking de
+					    HOY es el único donde todos corrieron exactamente la misma pista.
+					    El histórico se queda para que nadie pierda su récord. */}
+					{board && (board.today?.length > 0 || board.top?.length > 0) && (
 						<div className="w-full max-w-xs rounded-2xl liquid-glass liquid-glass--dark px-5 py-4 text-left">
-							<p className="mb-2 flex justify-between text-[11px] font-bold tracking-[0.2em] text-white/50">
-								<span>🌍 TOP 10 MUNDIAL</span>
-								<span className="tabular-nums">{board.runs.toLocaleString('es')} partidas</span>
+							<div className="mb-2 flex items-center gap-1 text-[11px] font-bold tracking-[0.15em]">
+								<button
+									type="button"
+									onClick={() => setBoardTab('today')}
+									className={`rounded-full px-2.5 py-1 transition-colors ${boardTab === 'today' ? 'bg-white/15 text-white' : 'text-white/40 hover:text-white/70'}`}
+								>
+									🏁 HOY
+								</button>
+								<button
+									type="button"
+									onClick={() => setBoardTab('all')}
+									className={`rounded-full px-2.5 py-1 transition-colors ${boardTab === 'all' ? 'bg-white/15 text-white' : 'text-white/40 hover:text-white/70'}`}
+								>
+									🌍 HISTÓRICO
+								</button>
+							</div>
+							{(boardTab === 'today' ? board.today : board.top)?.length > 0 ? (
+								(boardTab === 'today' ? board.today : board.top).slice(0, 10).map((row, i) => (
+									<div key={`${row.name}-${i}`} className="flex items-center justify-between gap-3 py-0.5 text-sm">
+										<span className={`truncate font-medium ${row.name === playerName ? 'text-malachite-500' : 'text-white/80'}`}>
+											{['🥇', '🥈', '🥉'][i] || `${i + 1}.`} {row.name}
+										</span>
+										<span className="shrink-0 tabular-nums font-bold text-[#ffd75e]">{row.score.toLocaleString('es')}</span>
+									</div>
+								))
+							) : (
+								<p className="py-3 text-center text-xs text-white/45">
+									Nadie ha corrido el mapa de hoy todavía.<br />
+									<span className="text-malachite-500 font-bold">Sé el primero.</span>
+								</p>
+							)}
+							<p className="mt-2 flex items-center justify-between text-[10px] text-white/35">
+								<span className="tabular-nums">{board.runs?.toLocaleString('es')} partidas</span>
+								<Link href="/play/top-scores" className="font-bold tracking-wide transition-colors hover:text-white/80">Top 50 →</Link>
 							</p>
-							{board.top.slice(0, 10).map((row, i) => (
-								<div key={`${row.name}-${i}`} className="flex items-center justify-between gap-3 py-0.5 text-sm">
-									<span className={`truncate font-medium ${row.name === playerName ? 'text-malachite-500' : 'text-white/80'}`}>
-										{['🥇', '🥈', '🥉'][i] || `${i + 1}.`} {row.name}
-									</span>
-									<span className="shrink-0 tabular-nums font-bold text-[#ffd75e]">{row.score.toLocaleString('es')}</span>
-								</div>
-							))}
-							<Link href="/play/top-scores" className="mt-2 block text-center text-[11px] font-bold tracking-wide text-white/45 transition-colors hover:text-white/80">
-								Top 10 →
-							</Link>
 						</div>
 					)}
+
+					{/* Fantasma del día + gente jugando ahora */}
+					<div className="flex flex-col items-center gap-2">
+						{ghostInfo && (
+							<p className="rounded-full liquid-glass liquid-glass--dark px-4 py-1.5 text-xs text-white/75">
+								👻 Corres contra {ghostInfo.mine
+									? <><strong className="text-white">tu récord de hoy</strong></>
+									: <><strong className="text-white">{ghostInfo.name}</strong></>}
+								{' — '}<span className="tabular-nums font-bold text-[#ffd75e]">{ghostInfo.score.toLocaleString('es')}</span>
+							</p>
+						)}
+						{presence?.live > 0 && (
+							<p className="flex items-center gap-1.5 text-[11px] text-white/50">
+								<span className="inline-block size-1.5 animate-pulse rounded-full bg-malachite-500" />
+								{presence.live === 1 ? '1 persona corriendo ahora' : `${presence.live} personas corriendo ahora`}
+							</p>
+						)}
+						{presence?.recent?.[0] && (
+							<p className="text-[11px] text-white/35">
+								último: <span className="text-white/55">{presence.recent[0].name}</span> — día {presence.recent[0].day} · {presence.recent[0].score.toLocaleString('es')} CUP
+							</p>
+						)}
+					</div>
+					<Link href="/" className="text-xs text-white/50 hover:text-white transition-colors">← Volver a las tasas</Link>
+				 </div>
+
+				 {/* Y si el de arriba queda fuera de vista al bajar, uno fijo abajo:
+				     desde cualquier punto del scroll se puede empezar a jugar */}
+				 {playOffscreen && (
 					<button
 						type="button"
 						onClick={() => setStatus('playing')}
-						className="rounded-full bg-malachite-500 px-10 py-3.5 text-lg font-extrabold text-black shadow-[0_0_40px_rgba(83,221,108,0.45)] hover:scale-105 active:scale-95 transition-transform"
+						className="fixed inset-x-0 bottom-0 z-20 mx-auto mb-4 w-[min(88%,320px)] animate-card-pop rounded-full bg-malachite-500 px-8 py-3.5 text-lg font-extrabold text-black shadow-[0_0_40px_rgba(83,221,108,0.55)] active:scale-95 transition-transform"
 					>
 						▶ JUGAR
 					</button>
-					<Link href="/" className="text-xs text-white/50 hover:text-white transition-colors">← Volver a las tasas</Link>
+				 )}
 				</div>
 			)}
 
 			{status === 'dead' && death && (
-				<div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 overflow-y-auto bg-black/60 p-6 text-center backdrop-blur-sm">
+				<div className="absolute inset-0 z-10 overflow-y-auto overscroll-contain bg-black/60 backdrop-blur-sm">
+				 <div className="flex min-h-full flex-col items-center justify-center gap-4 p-6 pb-6 text-center">
 
 					{death.won && <Confetti />}
 
@@ -1551,11 +2136,11 @@ export default function Game() {
 								alt={death.won
 									? `¡Llegaste hasta hoy! ${death.day} días — ${death.score.toLocaleString('es')} CUP`
 									: `Caíste en el día ${death.day} — ${death.score.toLocaleString('es')} CUP`}
-								className="w-[min(70vw,360px)] rounded-2xl ring-4 ring-white/90 shadow-[0_25px_80px_rgba(0,0,0,0.65)]"
+								className="w-[min(70vw,360px)] max-h-[42vh] object-contain rounded-2xl ring-4 ring-white/90 shadow-[0_25px_80px_rgba(0,0,0,0.65)]"
 							/>
 						</div>
 					) : (
-						<div className="flex size-[min(70vw,360px)] items-center justify-center rounded-2xl liquid-glass liquid-glass--dark">
+						<div className="flex size-[min(70vw,360px)] max-h-[42vh] items-center justify-center rounded-2xl liquid-glass liquid-glass--dark">
 							<div className="size-7 animate-spin rounded-full border-2 border-malachite-500 border-t-transparent" />
 						</div>
 					)}
@@ -1683,6 +2268,7 @@ export default function Game() {
 					</div>
 
 					<Link href="/" className="text-xs text-white/50 hover:text-white transition-colors">← Volver a las tasas</Link>
+				 </div>
 				</div>
 			)}
 		</div>

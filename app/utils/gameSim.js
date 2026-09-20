@@ -291,7 +291,10 @@ const applyOffers = (state, course, offers) => {
 
 		// CUP (y cualquier moneda sin dinámica propia): la regla original
 		if (value >= nominal) {
-			let x = state.worldX + state.w * 0.85 + dollarStagger
+			// Distancia medida desde el JUGADOR, no desde el borde del mundo: al
+			// arrancar el run el jugador va en state.px, así que 0,85×ancho dejaba
+			// menos de un segundo para reaccionar y la muerte era inevitable.
+			let x = state.worldX + state.px + Math.max(state.w * 0.95, 560) + dollarStagger
 			dollarStagger += 380
 			let guard = 0
 			while (holeAt(state, x) && guard++ < 20) x += 160
