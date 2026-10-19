@@ -10,7 +10,7 @@ const fetchAverage = async (coin) => {
 	const res = await fetch(`https://api.qvapay.com/p2p/completed_pairs_average?coin=${coin}`, { cache: 'no-store' })
 	if (!res.ok) throw new Error(`QvaPay ${coin} responded ${res.status}`)
 	// QvaPay responds with a bare `0` (or `{error}` when rate-limited) for coins
-	// without completed pairs — CUPCASH lives here until cash trades happen
+	// without valid completed trades in their window (low-volume CUPCASH can go a week without one)
 	const body = await res.json()
 	const { average_buy, average_sell } = body || {}
 	if (!Number.isFinite(average_buy) || !Number.isFinite(average_sell)) return null

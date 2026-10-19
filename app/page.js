@@ -11,7 +11,7 @@ import FloatingOffers from './components/FloatingOffers'
 import BackgroundLiveLine from './components/BackgroundLiveLine'
 
 // Utils
-import { randomize, averageData } from './utils/helpers'
+import { randomize, averageData, getTimeAgo } from './utils/helpers'
 
 // Config
 const COIN_CONFIG = {
@@ -25,6 +25,10 @@ const COIN_CONFIG = {
 }
 
 const COINS = Object.keys(COIN_CONFIG)
+
+// The cron saves a row every 10 min; QvaPay answering `0` (no valid trade in the
+// last 7 days — low-volume CASH can hit this) skips the save and freezes the tab
+const STALE_MS = 30 * 60 * 1000
 
 // Displacement map for the Liquid Glass lens: R channel encodes X shift, G encodes Y
 // (128 = neutral). Edges sample INWARD (rim compression, like iOS) — sampling outward
@@ -58,6 +62,7 @@ function HomeContent() {
 	const [value, setValue] = useState(0)
 	const [trendPct, setTrendPct] = useState(null)
 	const [noData, setNoData] = useState(false)
+	const [staleAgo, setStaleAgo] = useState(null)
 	const [bgColor, setBgColor] = useState('bg-crimson')
 	const [showModal, setShowModal] = useState(false)
 	const [copied, setCopied] = useState(false)
@@ -88,11 +93,12 @@ function HomeContent() {
 
 				const history = data[config.historyKey]
 				if (!history?.length) {
-					// Coin without market data yet (e.g. CASH until QvaPay records cash trades) —
+					// Coin without market data yet (e.g. CASH before its first valid cash trade) —
 					// reset so the previous coin's value doesn't linger on screen
 					setValue(0)
 					setTrendPct(null)
 					setNoData(true)
+					setStaleAgo(null)
 					setBgColor('bg-delft_blue')
 					return
 				}
@@ -103,6 +109,7 @@ function HomeContent() {
 				setValue(number)
 				setTrendPct(average ? ((number - average) / average) * 100 : null)
 				setNoData(false)
+				setStaleAgo(Date.now() - new Date(first.updated_at) > STALE_MS ? getTimeAgo(first.updated_at) : null)
 				setBgColor(number < average ? 'bg-malachite' : number > average ? 'bg-crimson' : 'bg-delft_blue')
 
 			} catch (err) { console.error('Error fetching rates:', err) }
@@ -231,6 +238,11 @@ function HomeContent() {
 						{noData && (
 							<span className="rounded-full liquid-glass px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90">
 								Sin datos de mercado todavía
+							</span>
+						)}
+						{staleAgo && (
+							<span className="rounded-full liquid-glass px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90">
+								Sin operaciones recientes · último dato {staleAgo}
 							</span>
 						)}
 						{trendPct !== null && (

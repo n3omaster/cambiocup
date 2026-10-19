@@ -14,4 +14,13 @@ const averageData = (arr) => {
 	return { first, average }
 }
 
-export { randomize, averageData }
+// Relative age of a timestamp in Spanish ("hace 5 min", "hace 2h", "hace 3d").
+const getTimeAgo = (date) => {
+	const seconds = Math.floor((new Date() - new Date(date)) / 1000)
+	if (seconds < 60) return 'hace segundos'
+	if (seconds < 3600) return `hace ${Math.floor(seconds / 60)} min`
+	if (seconds < 86400) return `hace ${Math.floor(seconds / 3600)}h`
+	return `hace ${Math.floor(seconds / 86400)}d`
+}
+
+export { randomize, averageData, getTimeAgo }

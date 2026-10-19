@@ -1,5 +1,6 @@
 import { ImageResponse } from 'next/og'
 import { getCoinData } from '@/lib/supabase'
+import { getTimeAgo } from '@/app/utils/helpers'
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic'
@@ -116,12 +117,4 @@ export async function GET(request) {
 			{ width: 1200, height: 630 }
 		)
 	}
-}
-
-function getTimeAgo(date) {
-	const seconds = Math.floor((new Date() - date) / 1000)
-	if (seconds < 60) return 'hace segundos'
-	if (seconds < 3600) return `hace ${Math.floor(seconds / 60)} min`
-	if (seconds < 86400) return `hace ${Math.floor(seconds / 3600)}h`
-	return `hace ${Math.floor(seconds / 86400)}d`
 }

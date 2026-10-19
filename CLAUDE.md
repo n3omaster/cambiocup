@@ -22,7 +22,7 @@ There are no tests in this project.
 **Tech Stack**: Next.js 16.2 (App Router), React 19.2, Tailwind CSS 4.3 (via `@tailwindcss/postcss`), Supabase JS v2, NumberFlow (animated numbers), Liveline (live chart), OneSignal (push notifications)
 
 **Data Flow**:
-1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` — CUPCASH until cash trades exist) are skipped, not saved. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
+1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` when a coin has no valid completed trade in its last 7 days — low-volume CUPCASH can hit this) are skipped, not saved. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
 2. **Serve**: `/api` → Returns last 6 entries per coin from database
 3. **Display**: Frontend polls `/api` every 4s → `averageData()` splits first value vs rest average → `randomize()` adds micro-fluctuation → color set by current vs average comparison
 4. **Offers**: `/api/webhook` receives buy/sell offers → `/api/offers` serves recent ones → `FloatingOffers` renders animated bubbles. The same feed also drives live difficulty events in the game
@@ -47,7 +47,7 @@ app/
 │   ├── FloatingOffers.js      # Animated buy/sell offer bubbles (polls /api/offers every 3s)
 │   └── BackgroundLiveLine.js  # Full-screen Liveline chart background (polls /api/history every 30s, 15 days)
 ├── utils/
-│   ├── helpers.js             # randomize(num, deep), averageData(arr)
+│   ├── helpers.js             # randomize(num, deep), averageData(arr), getTimeAgo(date) (shared by page.js and /api/og)
 │   ├── gameSim.js             # Pure deterministic CUP Runner engine — shared by client AND server replay verifier
 │   └── gameCodec.js           # XOR-scramble codec for game-score payloads (obfuscation, not crypto)
 └── api/
@@ -144,7 +144,7 @@ The game's score submission is verified by **deterministic re-simulation**, not 
 
 **`exchange` table** — Historical exchange rates (append-only, `updated_at` monotonic):
 - `id`, `coin_id` (int), `value` (float), `updated_at`, `created_at`
-- Coin IDs: 1=CUP, 2=MLC, 3=CLASICA, 4=ETECSA, 5=BANDECPREPAGO(TROPICAL), 6=GAS (fixed 3.50 USD/litre, not fetched from QvaPay — constant `GAS_PRICE` in `api/cron/route.js`), 7=CASH (QvaPay `CUPCASH`, CUP en efectivo — the coin exists on QvaPay with P2P enabled but has no completed pairs yet, so its history stays empty until cash trades happen; the frontend shows a "Sin datos de mercado todavía" chip)
+- Coin IDs: 1=CUP, 2=MLC, 3=CLASICA, 4=ETECSA, 5=BANDECPREPAGO(TROPICAL), 6=GAS (fixed 3.50 USD/litre, not fetched from QvaPay — constant `GAS_PRICE` in `api/cron/route.js`), 7=CASH (QvaPay `CUPCASH`, CUP en efectivo, ~800 CUP/USD in Oct 2026 vs ~1,017 by bank transfer). Until 2026-10-19 QvaPay never marked CUPCASH trades `valid` (the coin was missing from its ratio limits), so `completed_pairs_average` answered `0` despite ~13 public trades a month and the history stayed empty; fixed on the QvaPay side (limits 400–1200), no change needed here. With that volume a week without trades still answers `0` — the cron skips it and the tab keeps the last stored value, with a "Sin operaciones recientes · último dato hace X" chip once the newest row is older than `STALE_MS` (30 min, `page.js`; applies to every coin, so a dead cron shows it too). Caveat: while the 7-day window still holds one trade, the cron re-saves the same average every tick and the row looks fresh even if that trade is 6 days old — reflecting that needs QvaPay's `count`/`window_hours` stored, which we don't yet. When there is no history at all, the frontend shows a "Sin datos de mercado todavía" chip
 
 **`offers` table** — Buy/sell transaction records:
 - `id`, `type` ('buy'|'sell'), `status` ('attempt'|'completed'), `value` (float), `coin` (string), `created_at`
