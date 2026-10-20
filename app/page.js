@@ -12,6 +12,7 @@ import BackgroundLiveLine from './components/BackgroundLiveLine'
 
 // Utils
 import { randomize, averageData, getTimeAgo } from './utils/helpers'
+import { inQvaPay, signalReady, haptic } from './utils/qvapay'
 
 // Config
 const COIN_CONFIG = {
@@ -71,6 +72,9 @@ function HomeContent() {
 	const decimals = config.decimals
 
 	useEffect(() => {
+		// Dentro de la app de QvaPay no hay push web (el WebView no lo tiene) y la app ya avisa
+		// por su cuenta: solo se le dice que la página está lista para quitar su loader
+		if (inQvaPay()) { signalReady(); return }
 		OneSignal.init({ appId: '04dffeef-fbcd-4c21-95fc-eb358400eff2' })
 	}, [])
 
@@ -179,7 +183,8 @@ function HomeContent() {
 							<button
 								type="button"
 								onClick={() => setShowModal(true)}
-								className="text-white p-2.5 rounded-2xl liquid-glass hover:scale-105 active:scale-95"
+								// Insertar la tasa en otra web no pinta nada dentro de la app de QvaPay
+								className="text-white p-2.5 rounded-2xl liquid-glass hover:scale-105 active:scale-95 in-qvapay:hidden"
 								aria-label="Código iframe"
 								title="Obtener código iframe"
 							>
@@ -201,6 +206,7 @@ function HomeContent() {
 									key={name}
 									type="button"
 									onClick={(e) => {
+										if (name !== coin) haptic('light')
 										setCoin(name)
 										setNoData(false) // clear the previous coin's "sin datos" chip until the new fetch resolves
 										e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })

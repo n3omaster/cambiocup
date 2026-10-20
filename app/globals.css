@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 
+/* Dentro de la app de QvaPay (mini-app): <html data-qvapay> lo pone app/layout.js */
+@custom-variant in-qvapay (&:where([data-qvapay], [data-qvapay] *));
+
 @theme {
 	--font-*: initial;
 	--font-sans: Barlow, sans-serif;
@@ -9,6 +12,7 @@
 	/* --color-*: initial wipes Tailwind's default palette — re-add the tokens the app uses */
 	--color-white: #ffffff;
 	--color-black: #000000;
+	--color-qvapay: #6759ef;
 	--color-gray-100: #f3f4f6;
 	--color-gray-200: #e5e7eb;
 	--color-emerald-200: #a7f3d0;

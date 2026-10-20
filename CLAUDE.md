@@ -45,11 +45,13 @@ app/
 │   └── top-scores/page.js     # Full leaderboard page (server component, best score per player, top 50, revalidate 30s)
 ├── components/
 │   ├── FloatingOffers.js      # Animated buy/sell offer bubbles (polls /api/offers every 3s)
-│   └── BackgroundLiveLine.js  # Full-screen Liveline chart background (polls /api/history every 30s, 15 days)
+│   ├── BackgroundLiveLine.js  # Full-screen Liveline chart background (polls /api/history every 30s, 15 days)
+│   └── VerifiedBadge.js       # "Verificado con QvaPay" badge for leaderboard rows
 ├── utils/
 │   ├── helpers.js             # randomize(num, deep), averageData(arr), getTimeAgo(date) (shared by page.js and /api/og)
 │   ├── gameSim.js             # Pure deterministic CUP Runner engine — shared by client AND server replay verifier
-│   └── gameCodec.js           # XOR-scramble codec for game-score payloads (obfuscation, not crypto)
+│   ├── gameCodec.js           # XOR-scramble codec for game-score payloads (obfuscation, not crypto)
+│   └── qvapay.js              # Client helper for the QvaPay mini-app SDK (detection, ready, haptics, login/session) — no-op outside the app
 └── api/
     ├── route.js               # GET → last 6 entries per coin
     ├── cron/route.js           # GET → fetch from QvaPay API, save to Supabase
@@ -60,12 +62,14 @@ app/
     ├── game-token/route.js     # GET → signed HMAC run token (issued when a run starts)
     ├── og/route.js             # GET ?coin=CUP → dynamic OG image (1200×630)
     ├── og/play/route.js        # GET → OG card for /play (real CUP terrain from last 60 days). Edge-cached 1h
-    └── webhook/route.js        # POST → save new offer (type, status, value, coin)
+    ├── webhook/route.js        # POST → save new offer (type, status, value, coin)
+    └── qvapay-session/route.js # GET → {enabled} / POST {init_data} → verified QvaPay session (mini-app)
 lib/
 ├── supabase.js                # Supabase client + all DB operations
 ├── gameDay.js                 # Daily map freeze: Havana-midnight cutoff + `mapDay` id (handles Cuba's DST, where local midnight doesn't exist one night a year)
-├── gameToken.js               # Server-only HMAC run tokens for the game (issue/verify)
-└── gameHistory.js             # getBucketedHistory(coinId, asOf): parallel pagination past the 1000-row cap, buckets to ~2000 points
+├── gameToken.js               # Server-only HMAC run tokens for the game (issue/verify) + deriveSecret(label)
+├── gameHistory.js             # getBucketedHistory(coinId, asOf): parallel pagination past the 1000-row cap, buckets to ~2000 points
+└── qvapay.js                  # Server-only: QvaPay init_data verification + cambiocup session (mini-app login)
 scripts/
 ├── harden-game-rls.sql        # Paste-into-Supabase script: drops all game_scores RLS policies (service_role-only access)
 ├── fix-score-caps.sql         # Paste-into-Supabase: raises the score_cap/day_cap CHECKs and adds flag_reason. REQUIRED — without it any run over 500k points 500s and is lost
@@ -200,6 +204,19 @@ SUPABASE_KEY=<supabase-key>   # service_role if the RLS hardening script has bee
 ```
 
 Optional: `GAME_SCORE_SECRET` — HMAC secret for game run tokens (falls back to `SUPABASE_KEY`)
+
+Optional (QvaPay mini-app login, see below): `QVAPAY_APP_UUID` + `QVAPAY_APP_SECRET` — uuid and secret of the QvaPay App that owns the `cambiocup` mini-app. Server-only. Without them `/api/qvapay-session` answers 503 and the game keeps the typed Telegram @ flow.
+
+## QvaPay mini-app
+
+cambiocup is also a **mini-app inside the QvaPay mobile app** (row `mini_apps.slug = 'cambiocup'` in QvaPay, `entry_url` `https://www.cambiocup.com/?nocode=true`). The app opens it in a WebView and injects the SDK `window.QvaPay` *before* the page loads (the QvaPay `/dev` simulator injects it later and fires `qvapay:ready`). Outside the app nothing of this exists and the site behaves exactly as before.
+
+- **Detection**: one client helper, `app/utils/qvapay.js` (`qp()`, `inQvaPay()`, `useInQvaPay()`, `signalReady()`, `haptic()`, session store, `loginWithQvaPay()`); every function is a no-op outside the app. An inline `<head>` script in `app/layout.js` sets `<html data-qvapay>` before paint, and the Tailwind variant `in-qvapay:` (`@custom-variant` in `globals.css`) hides things without flashing: the iframe-embed button (home) and the share-card download button (blob downloads do nothing in the WebView). Share links (WhatsApp/Telegram/X) stay: the WebView hands them to the system.
+- **Inside the app**: `QvaPay.ready()` on mount (removes the native loader), **no OneSignal init** (no web push in a WebView), discreet haptics — `light` on coin change, `success`/`error` when a run ends (success on win or new local record), `success` when the submitted rank is top 10. Never per jump or per frame.
+- **Verified identity in CUP Runner**: "Entrar con QvaPay" → `QvaPay.auth.requestLogin({ scopes: ['profile'] })` → `init_data` → `POST /api/qvapay-session` (`GET` answers `{enabled}` so the button only shows when configured). `lib/qvapay.js` verifies it with QvaPay's exact algorithm (qpweb `scripts/miniapps/sign.js`: `secret_key = HMAC_SHA256("QvaPayMiniApp", app_secret)`, `hash = hex(HMAC_SHA256(secret_key, sorted "k=v" lines))`, timing-safe, `auth_date` ≤ 600 s) and also requires `app_uuid === QVAPAY_APP_UUID` and `mini_app === 'cambiocup'`. It returns a cambiocup session `{token, name, exp}` (2 h, HMAC with a subkey of the game secret via `deriveSecret()` in `lib/gameToken.js`), kept in memory + sessionStorage. The mini-app row in QvaPay must allow the `profile` scope (the username only travels with it).
+- **Score submit**: the client adds `qp: <session token>` to the payload. With a valid session the server **ignores the typed name**, uses the verified `@username` (lowercase; QvaPay usernames have their own looser regex, `verifiedName()`), and stores `qvapay_uuid` + `verified = true`. An invalid/expired session answers 401 `QVAPAY_SESSION_INVALID` (not the honeypot): the client drops it and shows the login button again, which re-submits on success. Anti-cheat (token, replay, honeypot) is unchanged — identity is an extra field, never part of the verification. No prizes or money move here.
+- **Ranking**: `verified` rides on the leaderboard reads (`withVerified()` in `lib/supabase.js` retries without the column pre-migration) and shows `app/components/VerifiedBadge.js` next to the name (in-game top 10 and `/play/top-scores`). `bestPerPlayer` keys by `qp:`/`tg:` + name, so a typed `@foo` and a verified `@foo` are different players (the typed one can be anybody). `qvapay_uuid` is never returned publicly.
+- **SQL**: `scripts/add-qvapay-identity.sql` (columns `qvapay_uuid text`, `verified boolean default false`, partial index). Safe to deploy before it: `saveGameScore` retries in layers on PGRST204/42703 (without the identity columns, then without the older extras), so a run is never lost.
 
 ## Common Tasks
 

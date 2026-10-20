@@ -5,6 +5,7 @@ import { decodePayload } from '@/app/utils/gameCodec'
 import { buildCourse, simulateRun, STEP_HZ } from '@/app/utils/gameSim'
 import { getBucketedHistory } from '@/lib/gameHistory'
 import { currentMapCutoff } from '@/lib/gameDay'
+import { verifyQvaPaySession } from '@/lib/qvapay'
 
 // Telegram username: 5-32 chars, letters/digits/underscore, starts with a letter
 const TG_RE = /^[a-zA-Z][a-zA-Z0-9_]{4,31}$/
@@ -115,12 +116,13 @@ const verifyRunInner = async ({ run, rev, score, day, tok, elapsed }) => {
 	return { ok: true }
 }
 
-// Mejor marca por jugador, en orden
+// Mejor marca por jugador, en orden. Un @ verificado con QvaPay y el mismo @ tecleado son
+// jugadores DISTINTOS (el tecleado puede ser cualquiera): cada uno con su fila.
 const bestPerPlayer = (rows, max = 10) => {
 	const seen = new Set()
 	const top = []
 	for (const row of rows || []) {
-		const key = row.name.toLowerCase()
+		const key = `${row.verified ? 'qp' : 'tg'}:${row.name.toLowerCase()}`
 		if (seen.has(key)) continue
 		seen.add(key)
 		top.push(row)
@@ -176,14 +178,27 @@ export async function POST(request) {
 
 		// Validación de forma ANTES de re-simular: un submit basura no merece
 		// que el server le reconstruya el mapa entero y le corra la física
-		const rawUser = String(raw.name || '').trim().replace(/^@+/, '')
 		const score = Math.round(Number(raw.score))
 		const day = Math.round(Number(raw.day))
 
-		if (!TG_RE.test(rawUser)) {
-			return NextResponse.json({ error: 'Usuario de Telegram inválido (5-32 caracteres, letras/números/_)' }, { status: 400 })
+		// Identidad: con sesión de QvaPay (jugando dentro de la app) el nombre es el @usuario
+		// VERIFICADO y el tecleado se ignora. Es un campo aparte del anti-cheat: el run se
+		// verifica exactamente igual con o sin ella. Una sesión inválida o caducada no cae al
+		// honeypot: se pide entrar de nuevo (el cliente la descarta y reintenta).
+		let name
+		let identity = null
+		if (raw.qp) {
+			const session = verifyQvaPaySession(raw.qp)
+			if (!session) return NextResponse.json({ error: 'Tu sesión de QvaPay caducó, entra de nuevo', code: 'QVAPAY_SESSION_INVALID' }, { status: 401 })
+			name = session.name
+			identity = { qvapayUuid: session.uuid }
+		} else {
+			const rawUser = String(raw.name || '').trim().replace(/^@+/, '')
+			if (!TG_RE.test(rawUser)) {
+				return NextResponse.json({ error: 'Usuario de Telegram inválido (5-32 caracteres, letras/números/_)' }, { status: 400 })
+			}
+			name = `@${rawUser.toLowerCase()}`
 		}
-		const name = `@${rawUser.toLowerCase()}`
 		if (!Number.isFinite(score) || score < 0 || score > MAX_SCORE) {
 			return NextResponse.json({ error: 'Puntuación inválida' }, { status: 400 })
 		}
@@ -223,7 +238,7 @@ export async function POST(request) {
 		if (flagged) console.warn(`[game-score] flagged ${name} score=${score} day=${day} reason=${reason}`)
 
 		const { day: mapDay } = currentMapCutoff()
-		const { error } = await saveGameScore(name, score, day, flagged, nonce, reason, mapDay, trace)
+		const { error } = await saveGameScore(name, score, day, flagged, nonce, reason, mapDay, trace, identity)
 		// 23505 = nonce already used (a replayed request): skip the save but keep
 		// the fake success so replays learn nothing
 		if (error && error.code !== '23505') {

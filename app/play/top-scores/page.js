@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { getTopScores, countGameRuns } from '@/lib/supabase'
+import VerifiedBadge from '@/app/components/VerifiedBadge'
 
 export const revalidate = 30 // el leaderboard se refresca solo cada 30s
 
@@ -16,12 +17,13 @@ export const metadata = {
 const MEDALS = ['🥇', '🥈', '🥉']
 
 // Mejor score por jugador (mismo criterio que el mini-leaderboard del juego),
-// hasta 50 puestos. flagged=true (honeypot) ya queda fuera en getTopScores.
+// hasta 50 puestos. flagged=true (honeypot) ya queda fuera en getTopScores. Un @ verificado
+// con QvaPay y el mismo @ tecleado son jugadores distintos.
 const bestPerPlayer = (rows) => {
 	const seen = new Set()
 	const top = []
 	for (const row of rows || []) {
-		const key = row.name.toLowerCase()
+		const key = `${row.verified ? 'qp' : 'tg'}:${row.name.toLowerCase()}`
 		if (seen.has(key)) continue
 		seen.add(key)
 		top.push(row)
@@ -60,13 +62,16 @@ export default async function TopScoresPage() {
 					<ol className="w-full overflow-hidden rounded-2xl liquid-glass liquid-glass--dark">
 						{top.map((row, i) => (
 							<li
-								key={`${row.name}-${i}`}
+								key={`${row.verified ? 'qp' : 'tg'}-${row.name}-${i}`}
 								className={`flex items-center gap-3 px-4 py-3 text-sm ${i > 0 ? 'border-t border-white/5' : ''} ${i < 3 ? 'bg-white/[0.03]' : ''}`}
 							>
 								<span className="w-8 shrink-0 text-center text-base font-bold tabular-nums text-white/50">
 									{MEDALS[i] || i + 1}
 								</span>
-								<span className="min-w-0 flex-1 truncate font-medium text-white/85">{row.name}</span>
+								<span className="flex min-w-0 flex-1 items-center gap-1.5 font-medium text-white/85">
+									<span className="truncate">{row.name}</span>
+									{row.verified && <VerifiedBadge />}
+								</span>
 								<span className="shrink-0 text-right text-xs tabular-nums text-white/40">día {row.day}</span>
 								<span className="w-24 shrink-0 text-right font-bold tabular-nums text-[#ffd75e]">
 									{row.score.toLocaleString('es')}

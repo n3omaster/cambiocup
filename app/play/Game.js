@@ -2,6 +2,8 @@
 
 import Link from 'next/link'
 import { encodePayload } from '@/app/utils/gameCodec'
+import { useInQvaPay, signalReady, haptic, useQvaPaySession, getQvaPaySession, clearQvaPaySession, qvapayLoginEnabled, loginWithQvaPay } from '@/app/utils/qvapay'
+import VerifiedBadge from '@/app/components/VerifiedBadge'
 import { DX, STEP, MAGNET_RADIUS, mulberry32, buildCourse, initSim, terrainY as simTerrainY, holeAt as simHoleAt, dayAt, applyResize, applyJump, applyOffers, stepPhysics } from '@/app/utils/gameSim'
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 
@@ -598,6 +600,35 @@ export default function Game() {
 	const revRef = useRef(null) // snapshot id de la historia usada para el course (anti-cheat)
 	const traceRef = useRef(null) // traza del run (saltos/ofertas/resizes por paso) — el server la re-simula
 
+	// Dentro de la app de QvaPay (mini-app): el jugador puede entrar con su cuenta y su @ sale
+	// VERIFICADO en el ranking en vez del @ de Telegram tecleado (app/utils/qvapay.js)
+	const inApp = useInQvaPay()
+	const qpSession = useQvaPaySession()
+	const [qpEnabled, setQpEnabled] = useState(false) // ¿el servidor tiene configurado el login?
+	const [qpBusy, setQpBusy] = useState(false)
+	const [qpError, setQpError] = useState(null)
+	const [showTgForm, setShowTgForm] = useState(false) // dentro de QvaPay, el @ tecleado es la segunda opción
+	const myName = qpSession?.name || playerName
+
+	useEffect(() => {
+		if (!inApp) return
+		signalReady()
+		let alive = true
+		qvapayLoginEnabled().then((on) => { if (alive) setQpEnabled(on) })
+		return () => { alive = false }
+	}, [inApp])
+
+	const qvapayLogin = useCallback(async () => {
+		setQpBusy(true)
+		setQpError(null)
+		try {
+			await loginWithQvaPay()
+			haptic('success')
+		} catch (err) {
+			if (err?.code !== 'USER_CANCELLED') setQpError(err?.message || 'No se pudo entrar con QvaPay')
+		} finally { setQpBusy(false) }
+	}, [])
+
 	useEffect(() => {
 		try {
 			// Sincroniza estado externo (localStorage) al montar. Si react-hooks vuelve
@@ -629,7 +660,7 @@ export default function Game() {
 	// Fantasma del día: tu propio récord si ya jugaste hoy, si no el del líder
 	const loadGhost = useCallback(async () => {
 		try {
-			const me = normalizeTg(localStorage.getItem(NAME_KEY))
+			const me = getQvaPaySession()?.name || normalizeTg(localStorage.getItem(NAME_KEY))
 			let res = me ? await fetch(`/api/game-ghost?self=${encodeURIComponent(me)}`) : null
 			let json = res?.ok ? await res.json() : null
 			if (!json?.ghost) {
@@ -1240,6 +1271,8 @@ export default function Game() {
 					stats.isRecord = true
 				}
 			} catch { /* localStorage unavailable */ }
+			// Dentro de la app de QvaPay: una vibración al terminar (nunca por salto ni por frame)
+			haptic(won || stats.isRecord ? 'success' : 'error')
 			try {
 				const sans = getComputedStyle(document.body).fontFamily || 'sans-serif'
 				buildShareCard(canvas, stats, sans).toBlob((blob) => {
@@ -2121,37 +2154,50 @@ export default function Game() {
 		} catch { /* user cancelled */ }
 	}, [share, shareText])
 
-	const submitScore = useCallback(async (name) => {
+	// `typedName` = @ de Telegram tecleado. Con sesión de QvaPay se ignora: el server pone el
+	// @usuario verificado de la sesión (`qp`) y descarta cualquier nombre que llegue
+	const submitScore = useCallback(async (typedName = null) => {
 		if (!death || submittedRef.current) return
+		const session = getQvaPaySession()
+		if (!session && !typedName) return
 		submittedRef.current = true
 		setSubmitError(null)
 		try {
-			localStorage.setItem(NAME_KEY, name)
-			setPlayerName(name)
+			if (!session) {
+				localStorage.setItem(NAME_KEY, typedName)
+				setPlayerName(typedName)
+			}
+			const name = session ? session.name : typedName
+			const qp = session ? { qp: session.token } : {}
 			// Espera el fetch del token si sigue en vuelo (una muerte a los ~3s podía
 			// ganarle la carrera y caer al honeypot con un submit sin token)
 			const token = runTokenRef.current || (runTokenPromiseRef.current ? await runTokenPromiseRef.current : null)
 			// La traza (saltos/ofertas/resizes por paso) + rev del mapa permiten al
 			// server re-simular el run entero: sin una traza que reproduzca el score,
 			// la submission cae al honeypot
-			const payload = { name, score: death.score, day: death.day, rev: revRef.current, run: traceRef.current }
+			const payload = { name, score: death.score, day: death.day, rev: revRef.current, run: traceRef.current, ...qp }
 			const res = await fetch('/api/game-score', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				// Scrambled envelope keyed by the run token; a plain payload (token
 				// fetch failed) still submits but lands in the server's honeypot
-				body: JSON.stringify(token ? { t: token, d: encodePayload(payload, token) } : { name, score: death.score, day: death.day }),
+				body: JSON.stringify(token ? { t: token, d: encodePayload(payload, token) } : { name, score: death.score, day: death.day, ...qp }),
 			})
 			if (res.ok) {
 				const json = await res.json()
 				setRank(json.rank)
+				if (json.rank && json.rank <= 10) haptic('success')
 				fetchBoard()
 			} else {
 				// Antes esto se tragaba el error en silencio: el jugador veía su
 				// récord local, ningún rank, y asumía que había quedado guardado
 				const json = await res.json().catch(() => null)
-				setSubmitError(json?.error || 'No se pudo guardar tu puntuación.')
 				submittedRef.current = false
+				if (json?.code === 'QVAPAY_SESSION_INVALID') {
+					// Sesión caducada: vuelve a salir "Entrar con QvaPay" y, al entrar, se reenvía solo
+					clearQvaPaySession()
+					setQpError(json.error)
+				} else setSubmitError(json?.error || 'No se pudo guardar tu puntuación.')
 			}
 		} catch {
 			setSubmitError('Sin conexión — toca para reintentar.')
@@ -2162,8 +2208,10 @@ export default function Game() {
 	// Known player: submit automatically the moment the death screen appears
 	useEffect(() => {
 		// setRank/setBoard ocurren tras un await, no es síncrono (ver nota de arriba)
-		if (status === 'dead' && death && playerName) submitScore(playerName)
-	}, [status, death, playerName, submitScore])
+		// Con sesión de QvaPay (también justo después de entrar en la pantalla de muerte) se
+		// anota con el @ verificado; si no, con el @ de Telegram guardado
+		if (status === 'dead' && death && (qpSession || playerName)) submitScore(qpSession ? null : playerName)
+	}, [status, death, playerName, qpSession, submitScore])
 
 	// El botón flotante de abajo solo aparece cuando el de arriba ya no se ve;
 	// si no, en pantallas altas salían dos JUGAR a la vez
@@ -2285,6 +2333,26 @@ export default function Game() {
 						</p>
 					)}
 
+					{/* Dentro de la app de QvaPay: con quién se anota el récord */}
+					{qpSession ? (
+						<p className="inline-flex items-center gap-1.5 rounded-full liquid-glass liquid-glass--dark px-4 py-1.5 text-xs text-white/75">
+							Jugando como <strong className="text-white">{qpSession.name}</strong>
+							<VerifiedBadge />
+						</p>
+					) : inApp && qpEnabled && (
+						<div className="flex flex-col items-center gap-1">
+							<button
+								type="button"
+								onClick={qvapayLogin}
+								disabled={qpBusy}
+								className="rounded-full liquid-glass liquid-glass--dark px-4 py-1.5 text-xs font-bold text-white/85 transition-colors hover:text-white disabled:opacity-60"
+							>
+								{qpBusy ? 'Un momento…' : 'Entrar con QvaPay pa\'l ranking verificado'}
+							</button>
+							{qpError && <p className="text-[11px] font-medium text-crimson-600">{qpError}</p>}
+						</div>
+					)}
+
 					{/* La leyenda es larga: plegada por defecto en móvil, que no empuje
 					    el resto de la pantalla fuera de la vista */}
 					<details className="group max-w-md text-left" open={typeof window !== 'undefined' && window.innerWidth >= 640}>
@@ -2329,9 +2397,10 @@ export default function Game() {
 							</div>
 							{(boardTab === 'today' ? board.today : board.top)?.length > 0 ? (
 								(boardTab === 'today' ? board.today : board.top).slice(0, 10).map((row, i) => (
-									<div key={`${row.name}-${i}`} className="flex items-center justify-between gap-3 py-0.5 text-sm">
-										<span className={`truncate font-medium ${row.name === playerName ? 'text-malachite-500' : 'text-white/80'}`}>
-											{['🥇', '🥈', '🥉'][i] || `${i + 1}.`} {row.name}
+									<div key={`${row.verified ? 'qp' : 'tg'}-${row.name}-${i}`} className="flex items-center justify-between gap-3 py-0.5 text-sm">
+										<span className={`flex min-w-0 items-center gap-1 font-medium ${(row.verified ? row.name === qpSession?.name : row.name === playerName) ? 'text-malachite-500' : 'text-white/80'}`}>
+											<span className="truncate">{['🥇', '🥈', '🥉'][i] || `${i + 1}.`} {row.name}</span>
+											{row.verified && <VerifiedBadge />}
 										</span>
 										<span className="shrink-0 tabular-nums font-bold text-[#ffd75e]">{row.score.toLocaleString('es')}</span>
 									</div>
@@ -2448,15 +2517,41 @@ export default function Game() {
 					{submitError && (
 						<button
 							type="button"
-							onClick={() => { submittedRef.current = false; if (playerName) submitScore(playerName) }}
+							onClick={() => { submittedRef.current = false; if (myName) submitScore(qpSession ? null : playerName) }}
 							className="rounded-2xl border border-crimson-500/60 bg-crimson-500/10 px-4 py-2.5 text-xs font-bold text-crimson-500 transition-colors hover:bg-crimson-500/20"
 						>
 							⚠️ {submitError}
-							{playerName && <span className="ml-1 text-white/70">Toca para reintentar ↻</span>}
+							{myName && <span className="ml-1 text-white/70">Toca para reintentar ↻</span>}
 						</button>
 					)}
 
-					{!playerName && (
+					{/* Dentro de QvaPay: primero la cuenta verificada; el @ tecleado queda de segunda opción */}
+					{!myName && inApp && qpEnabled && !showTgForm && (
+						<div className="flex flex-col items-center gap-2">
+							<button
+								type="button"
+								onClick={qvapayLogin}
+								disabled={qpBusy}
+								className="inline-flex h-11 items-center justify-center rounded-full bg-qvapay px-6 text-sm font-bold text-white hover:scale-105 active:scale-95 transition-transform disabled:opacity-60"
+							>
+								{qpBusy ? 'Un momento…' : 'Entrar con QvaPay'}
+							</button>
+							<p className="max-w-xs text-[11px] text-white/50">
+								{qpError
+									? <span className="text-crimson-600 font-medium">{qpError}</span>
+									: <>🎁 Anota tu récord con tu cuenta de QvaPay: tu @ sale <strong className="text-white/75">verificado</strong> y nadie lo puede usar. Cada semana premiamos al #1</>}
+							</p>
+							<button
+								type="button"
+								onClick={() => setShowTgForm(true)}
+								className="text-[11px] text-white/45 underline underline-offset-2 transition-colors hover:text-white/80"
+							>
+								Prefiero anotar mi @ de Telegram
+							</button>
+						</div>
+					)}
+
+					{!myName && (!inApp || !qpEnabled || showTgForm) && (
 						<form
 							onSubmit={(e) => {
 								e.preventDefault()
@@ -2545,7 +2640,8 @@ export default function Game() {
 						{share && (
 							<a
 								href={share.url} download="cup-runner.png" aria-label="Descargar imagen" title="Descargar imagen"
-								className="flex size-12 items-center justify-center rounded-full liquid-glass text-white hover:scale-110 active:scale-95 transition-transform"
+								// El WebView de QvaPay no descarga blobs: dentro de la app el botón no haría nada
+								className="flex size-12 items-center justify-center rounded-full liquid-glass text-white hover:scale-110 active:scale-95 transition-transform in-qvapay:hidden"
 							>
 								<svg className="size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
 									<path strokeLinecap="round" strokeLinejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14" />
