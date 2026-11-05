@@ -631,9 +631,9 @@ export default function Game() {
 
 	useEffect(() => {
 		try {
-			// Sincroniza estado externo (localStorage) al montar. Si react-hooks vuelve
-			// a analizar este componente, hará falta un eslint-disable-next-line de
-			// react-hooks/set-state-in-effect aquí.
+			// Sincroniza estado externo (localStorage) al montar: leerlo en el primer render
+			// daría un hydration mismatch, porque /play se prerenderiza sin él
+			// eslint-disable-next-line react-hooks/set-state-in-effect
 			setBest(JSON.parse(localStorage.getItem(BEST_KEY)))
 			// Only accept a stored name if it's a valid Telegram handle (older saves may predate the @ format)
 			const savedName = normalizeTg(localStorage.getItem(NAME_KEY))
@@ -698,7 +698,8 @@ export default function Game() {
 		} catch { /* leaderboard is optional decoration */ }
 	}, [])
 
-	// setBoard ocurre tras un await, no es síncrono (ver nota del efecto de arriba)
+	// Falso positivo: setBoard ocurre tras un await, no es síncrono
+	// eslint-disable-next-line react-hooks/set-state-in-effect
 	useEffect(() => { fetchBoard() }, [fetchBoard])
 
 	// Contador de gente jugando: se refresca cada 15 s, y el latido que alimenta
@@ -711,6 +712,8 @@ export default function Game() {
 				localStorage.setItem('cambiocup:play:cid', clientIdRef.current)
 			} catch { clientIdRef.current = `c${Math.random().toString(36).slice(2, 12)}` }
 		}
+		// Falso positivo: setPresence ocurre tras un await, no es síncrono
+		// eslint-disable-next-line react-hooks/set-state-in-effect
 		fetchPresence()
 		const poll = setInterval(fetchPresence, 15000)
 		return () => clearInterval(poll)
@@ -2207,9 +2210,11 @@ export default function Game() {
 
 	// Known player: submit automatically the moment the death screen appears
 	useEffect(() => {
-		// setRank/setBoard ocurren tras un await, no es síncrono (ver nota de arriba)
 		// Con sesión de QvaPay (también justo después de entrar en la pantalla de muerte) se
-		// anota con el @ verificado; si no, con el @ de Telegram guardado
+		// anota con el @ verificado; si no, con el @ de Telegram guardado.
+		// submitScore hace setState antes del primer await (setSubmitError, setPlayerName), pero
+		// no hay cascada: submittedRef corta la re-entrada y playerName llega con el mismo valor
+		// eslint-disable-next-line react-hooks/set-state-in-effect
 		if (status === 'dead' && death && (qpSession || playerName)) submitScore(qpSession ? null : playerName)
 	}, [status, death, playerName, qpSession, submitScore])
 
