@@ -1,3 +1,5 @@
+import QvaPayBar from '@/app/components/QvaPayBar'
+
 // Privacy Policy page
 export const metadata = {
 	title: 'Política de Privacidad - CambioCUP',
@@ -7,6 +9,7 @@ export const metadata = {
 export default function Privacy() {
 	return (
 		<div className="bg-malachite h-screen flex flex-col justify-center items-center">
+			<QvaPayBar subtitle="Política de privacidad" color="#0c9c3c" />
 			<h1 className="text-4xl font-bold mb-8">Privacy Policy</h1>
 			<div className="text-center p-4 leading-7">
 				<p>We are committed to protecting your privacy. This privacy policy outlines our practices concerning the non-collection of data.</p>

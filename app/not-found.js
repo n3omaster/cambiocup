@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import Image from 'next/image'
+import QvaPayBar from '@/app/components/QvaPayBar'
 
 export const metadata = {
 	title: 'Página no encontrada | CambioCUP',
@@ -9,6 +10,7 @@ export const metadata = {
 export default function NotFound() {
 	return (
 		<main className="bg-delft_blue flex min-h-screen flex-col items-center justify-center p-4 sm:p-8 md:p-12 relative z-20 overflow-hidden">
+			<QvaPayBar subtitle="Página no encontrada" color="#4b5068" />
 
 			{/* Ambient light + vignette */}
 			<div className="pointer-events-none absolute inset-0 z-0" aria-hidden="true">

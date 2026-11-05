@@ -23,8 +23,8 @@ There are no tests in this project.
 
 **Data Flow**:
 1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` when a coin has no valid completed trade in its last 7 days — low-volume CUPCASH can hit this) are skipped, not saved, and so is a coin with one side at `0`, since averaging it stores half the rate. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
-2. **Serve**: `/api` → Returns last 6 entries per coin from database
-3. **Display**: Frontend polls `/api` every 4s → `averageData()` splits first value vs rest average → `randomize()` adds micro-fluctuation → color set by current vs average comparison
+2. **Serve**: `/api` → Returns last 6 entries per coin from database, plus `dayAgo` (each coin's value 24 h ago, `getDayAgoValues()`, computed once per 10-min tick because `/api` is polled every 4s per visitor)
+3. **Display**: Frontend polls `/api` every 4s → `randomize()` adds micro-fluctuation to the **number only** → `dayTrend()` sets color and chip from the real latest value vs `dayAgo`
 4. **Offers**: `/api/webhook` receives buy/sell offers → `/api/offers` serves recent ones → `FloatingOffers` renders animated bubbles. The same feed also drives live difficulty events in the game
 5. **Charts**: `/api/history` returns N-day data → `BackgroundLiveLine` renders a full-screen `liveline` chart behind the main content, fed the live randomized value between history refreshes
 6. **Live game dynamics**: every offer that reaches `/api/webhook` becomes an in-game event during a CUP Runner run, and **the coin decides which one** (see Live dynamics below)
@@ -46,14 +46,15 @@ app/
 ├── components/
 │   ├── FloatingOffers.js      # Animated buy/sell offer bubbles (polls /api/offers every 3s)
 │   ├── BackgroundLiveLine.js  # Full-screen Liveline chart background (polls /api/history every 30s, 15 days)
-│   └── VerifiedBadge.js       # "Verificado con QvaPay" badge for leaderboard rows
+│   ├── VerifiedBadge.js       # "Verificado con QvaPay" badge for leaderboard rows
+│   └── QvaPayBar.js           # useQvaPayBar for server pages: sets QvaPay's top bar, renders nothing
 ├── utils/
-│   ├── helpers.js             # randomize(num, deep), averageData(arr), getTimeAgo(date) (shared by page.js and /api/og)
+│   ├── helpers.js             # randomize(num, deep), dayTrend(current, dayAgo), getTimeAgo(date) (shared by page.js and /api/og)
 │   ├── gameSim.js             # Pure deterministic CUP Runner engine — shared by client AND server replay verifier
 │   ├── gameCodec.js           # XOR-scramble codec for game-score payloads (obfuscation, not crypto)
 │   └── qvapay.js              # Client helper for the QvaPay mini-app SDK (detection, ready, haptics, login/session) — no-op outside the app
 └── api/
-    ├── route.js               # GET → last 6 entries per coin
+    ├── route.js               # GET → last 6 entries per coin + values 24 h ago
     ├── cron/route.js           # GET → fetch from QvaPay API, save to Supabase
     ├── offers/route.js         # GET → recent offers (last 2 minutes)
     ├── history/route.js        # GET ?coin=CUP&days=7 → chart data
@@ -86,7 +87,7 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 
 | Endpoint | Method | Params | Description |
 |---|---|---|---|
-| `/api` | GET | — | Returns `{cupHistory, mlcHistory, clasicaHistory, etecsaHistory, bandecprepagoHistory, gasHistory}` (6 entries each) |
+| `/api` | GET | — | Returns `{cupHistory, mlcHistory, clasicaHistory, etecsaHistory, bandecprepagoHistory, gasHistory, cupcashHistory}` (6 entries each) and `dayAgo: {<same keys>: value}` (values 24 h ago; `{}` if that lookup fails, so the rate still loads) |
 | `/api/cron` | GET | — | Fetches 6 coins from QvaPay, saves averages + fixed GAS price to DB (coins answering no data are skipped) |
 | `/api/offers` | GET | — | Returns offers created in last 2 minutes |
 | `/api/history` | GET | `coin`, `days` | Returns `{data: [{time, value}], coin}` — `time` is a unix timestamp in seconds |
@@ -201,7 +202,7 @@ Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders ne
 - **Path alias**: `@/*` maps to project root (jsconfig.json)
 - **Client components**: All interactive files use `"use client"` directive
 - **Per-coin config**: `COIN_CONFIG` in `page.js` maps each coin to `{historyKey, decimals, deep}` — decimals: CUP/CASH/ETECSA/TROPICAL/GAS = 2, MLC/CLASICA = 3; randomize span (`deep`): CUP/CASH/ETECSA/TROPICAL/GAS = 0.5, MLC = 0.009, CLASICA = 0.005. GAS is stored as a fixed 3.50 but gets the same `deep` jitter as the rest so it reads like live data; it also sets `unit: 'USD por litro'` (rendered as a chip under the price)
-- **Color logic**: `current < average` → green (malachite/bg-malachite) = price is low; `current > average` → red (crimson/bg-crimson) = price is high; exact tie → neutral (bg-delft_blue). Same three-way logic in `/api/og`. Transition is 0.5s ease on `<main>`
+- **Color logic**: `dayTrend()` in `helpers.js` compares the real latest value against the value 24 h ago: lower → green (bg-malachite), higher → red (bg-crimson), within ±`STABLE_PCT` (0.3%) → blue (bg-delft_blue), also when there is no reference. Same logic in `/api/og`. Never feed it the `randomize()` number: that noise (±0.25%) was up to 20× the real move, which made the color flip at random every 4s on most coins. 24 h beats yesterday's close because right after midnight the close compares a value against itself (CUP: 0.2 vs 5.2 color changes a day). 0.3% was the threshold with the fewest color changes over a 6-day sample, worth re-checking with more history. Transition is 0.5s ease on `<main>`
 - **Tailwind v4 theme**: Custom colors defined in `globals.css` under `@theme` block (not tailwind.config.js). `--color-*: initial` wipes Tailwind's default palette, so any default token the app uses must be re-declared there
 - **Liquid Glass UI**: `.liquid-glass` (+ `--dark/--emerald/--red` variants) in `globals.css`, driven by an SVG displacement-map `backdrop-filter` defined in `page.js` (`GlassLensFilter`); edges sample inward to avoid Chrome edge-clamp streaks
 - **Font**: Barlow (weights: 500, 800, 900) loaded via `next/font/google`
@@ -232,6 +233,7 @@ cambiocup is also a **mini-app inside the QvaPay mobile app** (row `mini_apps.sl
 
 - **Detection**: one client helper, `app/utils/qvapay.js` (`qp()`, `inQvaPay()`, `useInQvaPay()`, `signalReady()`, `haptic()`, session store, `loginWithQvaPay()`); every function is a no-op outside the app. An inline `<head>` script in `app/layout.js` sets `<html data-qvapay>` before paint, and the Tailwind variant `in-qvapay:` (`@custom-variant` in `globals.css`) hides things without flashing: the iframe-embed button (home) and the share-card download button (blob downloads do nothing in the WebView). Share links (WhatsApp/Telegram/X) stay: the WebView hands them to the system.
 - **Inside the app**: `QvaPay.ready()` on mount (removes the native loader), **no OneSignal init** (no web push in a WebView), discreet haptics — `light` on coin change, `success`/`error` when a run ends (success on win or new local record), `success` when the submitted rank is top 10. Never per jump or per frame.
+- **Top bar**: the bar is QvaPay's (logo, name, left button close/back on their own); we only set subtitle, up to 2 actions and color, through `useQvaPayBar({ subtitle, actions, color, onAction })` in `app/utils/qvapay.js`, or `<QvaPayBar>` from server pages. Detected by feature, never by version: `ui.header` needs app 3.7.0 and `ui.colors` 3.7.1. Both are host state that survives navigation, so **every page must declare its bar**: a new page without one inherits the previous page's subtitle, color and actions. `data-qvapay-bar` on `<html>` (set with `data-qvapay`, only if `ui.header` exists) plus the Tailwind variant `in-qvapay-bar:` remove what the bar replaces (the home `h1`, kept as `sr-only`); older apps keep it. Home: `BAR_COLORS` in `page.js` are the **measured** top row of the page, not the theme tokens, because the ambient glow lightens it and the token shows a visible seam (contrast 1.41 vs 1.09 on blue), so re-measure if that glow changes. `/play`: the `records` action is removed while `status === 'playing'` **and** ignored in the handler, since the host removes it asynchronously and a tap already in flight would lose the run. Icons come from a closed catalog with no "play" icon; invalid params reject with `INVALID_PARAMS`, logged as `[qvapay]`. The closed contract lives in the native app (`~/apps/QvaPay/miniapps/protocol.ts`, `sdkScript.ts`).
 - **Verified identity in CUP Runner**: "Entrar con QvaPay" → `QvaPay.auth.requestLogin({ scopes: ['profile'] })` → `init_data` → `POST /api/qvapay-session` (`GET` answers `{enabled}` so the button only shows when configured). `lib/qvapay.js` verifies it with QvaPay's exact algorithm (qpweb `scripts/miniapps/sign.js`: `secret_key = HMAC_SHA256("QvaPayMiniApp", app_secret)`, `hash = hex(HMAC_SHA256(secret_key, sorted "k=v" lines))`, timing-safe, `auth_date` ≤ 600 s) and also requires `app_uuid === QVAPAY_APP_UUID` and `mini_app === 'cambiocup'`. It returns a cambiocup session `{token, name, exp}` (2 h, HMAC with a subkey of the game secret via `deriveSecret()` in `lib/gameToken.js`), kept in memory + sessionStorage. The mini-app row in QvaPay must allow the `profile` scope (the username only travels with it).
 - **Score submit**: the client adds `qp: <session token>` to the payload. With a valid session the server **ignores the typed name**, uses the verified `@username` (lowercase; QvaPay usernames have their own looser regex, `verifiedName()`), and stores `qvapay_uuid` + `verified = true`. An invalid/expired session answers 401 `QVAPAY_SESSION_INVALID` (not the honeypot): the client drops it and shows the login button again, which re-submits on success. Anti-cheat (token, replay, honeypot) is unchanged — identity is an extra field, never part of the verification. No prizes or money move here.
 - **Ranking**: `verified` rides on the leaderboard reads (`withVerified()` in `lib/supabase.js` retries without the column pre-migration) and shows `app/components/VerifiedBadge.js` next to the name (in-game top 10 and `/play/top-scores`). `bestPerPlayer` keys by `qp:`/`tg:` + name, so a typed `@foo` and a verified `@foo` are different players (the typed one can be anybody). `qvapay_uuid` is never returned publicly.
