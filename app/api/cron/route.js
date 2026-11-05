@@ -6,6 +6,9 @@ const QVAPAY_COINS = ['BANK_CUP', 'BANK_MLC', 'CLASICA', 'ETECSA', 'BANDECPREPAG
 // GAS is not traded on QvaPay — fixed price per litre in USD
 const GAS_PRICE = 3.5
 
+// Un lado en 0 no es un precio: promediarlo guardaría la tasa partida a la mitad
+const isPrice = (value) => Number.isFinite(value) && value > 0
+
 const fetchAverage = async (coin) => {
 	const res = await fetch(`https://api.qvapay.com/p2p/completed_pairs_average?coin=${coin}`, { cache: 'no-store' })
 	if (!res.ok) throw new Error(`QvaPay ${coin} responded ${res.status}`)
@@ -13,7 +16,7 @@ const fetchAverage = async (coin) => {
 	// without valid completed trades in their window (low-volume CUPCASH can go a week without one)
 	const body = await res.json()
 	const { average_buy, average_sell } = body || {}
-	if (!Number.isFinite(average_buy) || !Number.isFinite(average_sell)) return null
+	if (!isPrice(average_buy) || !isPrice(average_sell)) return null
 	return (average_buy + average_sell) / 2
 }
 
