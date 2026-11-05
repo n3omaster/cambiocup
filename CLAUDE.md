@@ -12,14 +12,14 @@ CambioCUP is a real-time Cuban currency exchange rate tracker displaying live ra
 npm run dev      # Development server (Turbopack is default in Next.js 16)
 npm run build    # Production build
 npm run start    # Start production server
-npm run lint     # ESLint flat config (v9) with nextVitals — pinned to v9 because eslint-config-next (checked up to 16.3) ships APIs incompatible with v10 (`scopeManager.addGlobals is not a function`)
+npm run lint     # ESLint flat config (v9) with nextVitals — stays on v9 because eslint-plugin-react 7.37.5 (pulled by eslint-config-next, checked at 16.4.5) only declares support up to ^9.7. v10 does run on 16.4.5 (the old `scopeManager.addGlobals is not a function` crash is gone) but with a peer warning
 ```
 
 There are no tests in this project.
 
 ## Architecture
 
-**Tech Stack**: Next.js 16.2 (App Router), React 19.2, Tailwind CSS 4.3 (via `@tailwindcss/postcss`), Supabase JS v2, NumberFlow (animated numbers), Liveline (live chart), OneSignal (push notifications)
+**Tech Stack**: Next.js 16.4 (App Router), React 19.3, Tailwind CSS 4.3 (via `@tailwindcss/postcss`), Supabase JS v2, NumberFlow (animated numbers), Liveline (live chart), OneSignal (push notifications)
 
 **Data Flow**:
 1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` when a coin has no valid completed trade in its last 7 days — low-volume CUPCASH can hit this) are skipped, not saved, and so is a coin with one side at `0`, since averaging it stores half the rate. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
