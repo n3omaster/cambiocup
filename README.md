@@ -96,7 +96,8 @@ flowchart LR
 | `/api` | GET | Últimas 6 entradas por moneda |
 | `/api/cron` | GET | Ingesta desde QvaPay (cron cada 10 min) |
 | `/api/offers` | GET | Ofertas de los últimos 2 minutos |
-| `/api/history?coin=CUP&days=7` | GET | Serie histórica para gráficas |
+| `/api/v1/history?coin=CUP` | GET | Historial completo público ([ver abajo](#-api-pública-de-historial)) |
+| `/api/history?coin=CUP&days=7` | GET | Serie histórica para gráficas (últimas 1000 filas, unos 7 días) |
 | `/api/game-history?coin=CUP` | GET | Historia completa bucketizada para el terreno del juego |
 | `/api/game-token` | GET | Token HMAC firmado que abre un run (anti-cheat) |
 | `/api/game-score` | GET / POST | Leaderboard / envío de run verificado por re-simulación |
@@ -125,6 +126,57 @@ flowchart LR
 - `name` (usuario de Telegram), `score`, `day`, `flagged` (honeypot 🍯), `nonce` (tokens de un solo uso)
 
 </details>
+
+## 📊 API pública de historial
+
+El historial completo de las tasas, gratis, de solo lectura y sin clave. El CUP llega hasta noviembre de 2023. El CORS está abierto, así que se puede consultar desde un navegador, una hoja de cálculo o un asistente de IA.
+
+```
+GET https://www.cambiocup.com/api/v1/history
+```
+
+| Parámetro | Valores | Por defecto |
+|---|---|---|
+| `coin` | `CUP`, `MLC`, `CLASICA`, `ETECSA`, `TROPICAL`, `CASH` | `CUP` |
+| `interval` | `1d` (una fila por día de La Habana) o `raw` (cada fila guardada) | `1d` |
+| `from`, `to` | `YYYY-MM-DD`, días de La Habana, ambos incluidos | toda la historia |
+| `limit` | de 1 a 1000, solo con `raw` | `1000` |
+| `cursor` | el `next_cursor` de la respuesta anterior, solo con `raw` | — |
+| `format` | `json` o `csv` | `json` |
+
+**Ejemplos**
+
+- [Todo el CUP por días, en CSV](https://www.cambiocup.com/api/v1/history?coin=CUP&format=csv)
+- [El MLC de 2026 por días, en JSON](https://www.cambiocup.com/api/v1/history?coin=MLC&from=2026-01-01)
+- [Las filas crudas del CUP desde el 1 de noviembre de 2026](https://www.cambiocup.com/api/v1/history?coin=CUP&interval=raw&from=2026-11-01)
+
+**Respuesta** (valores de ejemplo)
+
+```json
+{
+  "coin": "CUP",
+  "pair": "CUP/QUSD",
+  "interval": "1d",
+  "timezone": "America/Havana",
+  "note": "Cada valor es el punto medio entre average_buy y average_sell…",
+  "data": [
+    { "date": "2026-11-04", "open": 1098.2, "high": 1101.3, "low": 1097.6, "close": 1100.1, "avg": 1099.4, "samples": 144 }
+  ],
+  "next_cursor": null
+}
+```
+
+Con `interval=raw`, cada fila es `{ "time": "2026-11-05T19:40:19.468684Z", "value": 1099.51385 }`. Las filas salen de la más antigua a la más reciente. Para recorrerlas, repite la petición con los mismos parámetros y `cursor=<next_cursor>` hasta que `next_cursor` sea `null`. En CSV el cursor llega en la cabecera `X-Next-Cursor`.
+
+Los errores responden `400` con `{ "error": { "code", "message" } }`, y una moneda o un intervalo desconocido incluye además la lista `valid`. La gasolina no está incluida porque es un precio fijo, no un dato de mercado.
+
+**Antes de usar estos datos para operar**
+
+- **Un valor no es el precio de una operación.** Es el punto medio entre el promedio de compra y el de venta de las operaciones P2P completadas en QvaPay, dentro de una ventana móvil (48 horas en noviembre de 2026). La serie va suavizada y con retraso.
+- **`open`, `high`, `low` y `close` resumen esa serie**, no operaciones reales, así que el rango real del mercado fue más amplio.
+- **Hay días sin datos.** No se interpolan: esos días no tienen fila.
+- **El día en curso está incompleto.** `samples` dice cuántas filas entraron en cada día.
+- **Puede haber valores atípicos.** El historial se publica tal como se guardó.
 
 ## 🚀 Instalación
 
