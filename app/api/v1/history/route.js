@@ -31,7 +31,7 @@ const CORS = {
 // CDN-Cache-Control, que leen los dos. Cache-Control queda para el navegador.
 // Un rango cerrado no cambia: `exchange` es append-only. Lo abierto sigue al cron de 10 minutos.
 const cacheHeaders = (settled) => settled
-	? { 'Cache-Control': 'public, max-age=86400', 'CDN-Cache-Control': 'public, max-age=7776000' }
+	? { 'Cache-Control': 'public, max-age=86400', 'CDN-Cache-Control': 'public, max-age=31536000' }
 	: { 'Cache-Control': 'public, max-age=60', 'CDN-Cache-Control': 'public, max-age=600, stale-while-revalidate=3600' }
 
 const fail = (status, code, message, extra = {}) => NextResponse.json(
