@@ -5,13 +5,17 @@ const randomize = (num, deep = 0.1) => {
 	return num * (1 + variation)
 }
 
-// Splits a history array into the most-recent entry and the average of the rest.
-const averageData = (arr) => {
-	if (!arr?.length) return { first: null, average: 0 }
-	const [first, ...rest] = arr
-	if (rest.length === 0) return { first, average: first.value }
-	const average = rest.reduce((acc, curr) => acc + curr.value, 0) / rest.length
-	return { first, average }
+// Por debajo de este cambio en 24 h la moneda está estable (azul). Medido con el histórico: es
+// el umbral con menos cambios de color, y queda por encima de los ±0,25 % de `randomize`, así
+// que nunca se pinta como movimiento algo que no se distingue del ruido del número en pantalla.
+const STABLE_PCT = 0.3
+
+// Tendencia frente a hace 24 h. `current` es el dato real, nunca el número con ruido.
+// state: 'up' | 'down' | 'stable'. Sin referencia, pct es null y cuenta como estable.
+const dayTrend = (current, dayAgo) => {
+	if (!dayAgo) return { pct: null, state: 'stable' }
+	const pct = ((current - dayAgo) / dayAgo) * 100
+	return { pct, state: Math.abs(pct) <= STABLE_PCT ? 'stable' : pct > 0 ? 'up' : 'down' }
 }
 
 // Relative age of a timestamp in Spanish ("hace 5 min", "hace 2h", "hace 3d").
@@ -23,4 +27,4 @@ const getTimeAgo = (date) => {
 	return `hace ${Math.floor(seconds / 86400)}d`
 }
 
-export { randomize, averageData, getTimeAgo }
+export { randomize, dayTrend, getTimeAgo }

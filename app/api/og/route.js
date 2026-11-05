@@ -1,6 +1,6 @@
 import { ImageResponse } from 'next/og'
-import { getCoinData } from '@/lib/supabase'
-import { getTimeAgo } from '@/app/utils/helpers'
+import { getCoinData, getDayAgoValues } from '@/lib/supabase'
+import { dayTrend, getTimeAgo } from '@/app/utils/helpers'
 
 // Disable caching for real-time data
 export const dynamic = 'force-dynamic'
@@ -45,20 +45,18 @@ export async function GET(request) {
 		const coinConfig = COINS[coinParam] || COINS.CUP
 
 		// Fetch data directly from database
-		const data = await getCoinData()
+		const [data, dayAgo] = await Promise.all([getCoinData(), getDayAgoValues().catch(() => ({}))])
 		const history = data[coinConfig.coinId]
 
 		if (!history || history.length === 0) {
 			throw new Error('No data available')
 		}
 
-		// Get current value and calculate average
+		// Same trend as the home page: current value vs 24 hours ago
 		const currentValue = history[0].value
-		const average = history.reduce((sum, item) => sum + item.value, 0) / history.length
-
-		// Determine color based on trend (equal = fixed price, e.g. GAS)
-		const bgColor = currentValue < average ? COLORS.green : currentValue > average ? COLORS.red : COLORS.neutral
-		const trendText = currentValue < average ? '↓' : currentValue > average ? '↑' : '•'
+		const { state } = dayTrend(currentValue, dayAgo[coinConfig.coinId])
+		const bgColor = { down: COLORS.green, up: COLORS.red, stable: COLORS.neutral }[state]
+		const trendText = { down: '↓', up: '↑', stable: '•' }[state]
 
 		// Format value
 		const formattedValue = currentValue.toFixed(coinConfig.decimals)

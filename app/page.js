@@ -11,7 +11,7 @@ import FloatingOffers from './components/FloatingOffers'
 import BackgroundLiveLine from './components/BackgroundLiveLine'
 
 // Utils
-import { randomize, averageData, getTimeAgo } from './utils/helpers'
+import { randomize, dayTrend, getTimeAgo } from './utils/helpers'
 import { inQvaPay, signalReady, haptic, useQvaPayBar, shareInQvaPay } from './utils/qvapay'
 
 // Config
@@ -26,6 +26,9 @@ const COIN_CONFIG = {
 }
 
 const COINS = Object.keys(COIN_CONFIG)
+
+// Verde = más barato que hace 24 h, rojo = más caro, azul = estable (dayTrend en helpers.js)
+const TREND_COLORS = { down: 'bg-malachite', up: 'bg-crimson', stable: 'bg-delft_blue' }
 
 // La barra de QvaPay continúa la página: es el color MEDIDO de su franja superior, no el del
 // token (#0c9c3c…), porque el brillo ambiental la aclara y con el token se vería el corte.
@@ -67,15 +70,15 @@ function HomeContent() {
 
 	const [coin, setCoin] = useState('CUP')
 	const [value, setValue] = useState(0)
-	const [trendPct, setTrendPct] = useState(null)
+	const [trend, setTrend] = useState(null) // { pct, state } frente a hace 24 h
 	const [noData, setNoData] = useState(false)
 	const [staleAgo, setStaleAgo] = useState(null)
-	const [bgColor, setBgColor] = useState('bg-crimson')
 	const [showModal, setShowModal] = useState(false)
 	const [copied, setCopied] = useState(false)
 
 	const config = COIN_CONFIG[coin]
 	const decimals = config.decimals
+	const bgColor = TREND_COLORS[trend?.state ?? 'stable']
 
 	useEffect(() => {
 		// Dentro de la app de QvaPay no hay push web (el WebView no lo tiene) y la app ya avisa
@@ -106,21 +109,20 @@ function HomeContent() {
 					// Coin without market data yet (e.g. CASH before its first valid cash trade) —
 					// reset so the previous coin's value doesn't linger on screen
 					setValue(0)
-					setTrendPct(null)
+					setTrend(null)
 					setNoData(true)
 					setStaleAgo(null)
-					setBgColor('bg-delft_blue')
 					return
 				}
 
-				const { first, average } = averageData(history)
-				const number = Number.parseFloat(randomize(first.value, config.deep))
+				const first = history[0]
 
-				setValue(number)
-				setTrendPct(average ? ((number - average) / average) * 100 : null)
+				// El ruido es solo para el número: el color y el chip salen del dato real, o
+				// cambiarían al azar cada 4 s (el ruido llega a ser 20 veces el movimiento real)
+				setValue(Number.parseFloat(randomize(first.value, config.deep)))
+				setTrend(dayTrend(first.value, data.dayAgo?.[config.historyKey]))
 				setNoData(false)
 				setStaleAgo(Date.now() - new Date(first.updated_at) > STALE_MS ? getTimeAgo(first.updated_at) : null)
-				setBgColor(number < average ? 'bg-malachite' : number > average ? 'bg-crimson' : 'bg-delft_blue')
 
 			} catch (err) { console.error('Error fetching rates:', err) }
 		}
@@ -269,10 +271,14 @@ function HomeContent() {
 								Sin operaciones recientes · último dato {staleAgo}
 							</span>
 						)}
-						{trendPct !== null && (
+						{trend && trend.pct !== null && (
 							<span className="inline-flex items-center gap-1.5 rounded-full liquid-glass liquid-glass--dark px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90 tabular-nums">
-								<span aria-hidden="true">{trendPct < 0 ? '▼' : '▲'}</span>
-								{Math.abs(trendPct).toFixed(2)}% vs promedio reciente
+								{trend.state === 'stable' ? 'Estable en 24 h' : (
+									<>
+										<span aria-hidden="true">{trend.pct < 0 ? '▼' : '▲'}</span>
+										{Math.abs(trend.pct).toFixed(2)}% en 24 h
+									</>
+								)}
 							</span>
 						)}
 					</div>
