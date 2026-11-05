@@ -30,10 +30,10 @@ const COINS = Object.keys(COIN_CONFIG)
 // Verde = más barato que hace 24 h, rojo = más caro, azul = estable (dayTrend en helpers.js)
 const TREND_COLORS = { down: 'bg-malachite', up: 'bg-crimson', stable: 'bg-delft_blue' }
 
-// La barra de QvaPay continúa la página: es el color MEDIDO de su franja superior, no el del
-// token (#0c9c3c…), porque el brillo ambiental la aclara y con el token se vería el corte.
-// Si cambia ese brillo hay que volver a medirlo. ui.colors.set solo acepta hex opaco.
-const BAR_COLORS = { 'bg-malachite': '#21a54d', 'bg-crimson': '#d01c34', 'bg-delft_blue': '#4b5068' }
+// La barra de QvaPay continúa la página: mismos colores que bg-malachite/bg-crimson/bg-delft_blue
+// en globals.css, porque ui.colors.set solo acepta hex opaco. Dentro de la app se quita el brillo
+// ambiental: cada dispositivo lo pinta distinto y es lo que separaría la página de la barra.
+const BAR_COLORS = { 'bg-malachite': '#0c9c3c', 'bg-crimson': '#cc0721', 'bg-delft_blue': '#3a405a' }
 const BAR_ACTIONS = [{ id: 'share', icon: 'share', label: 'Compartir la tasa' }]
 
 // The cron saves a row every 10 min; QvaPay answering `0` (no valid trade in the
@@ -171,7 +171,7 @@ function HomeContent() {
 
 				{/* Ambient light + vignette */}
 				<div className="pointer-events-none absolute inset-0 z-0" aria-hidden="true">
-					<div className="absolute -top-1/4 left-1/2 h-[70vh] w-[90vw] -translate-x-1/2 rounded-full bg-white/15 blur-[120px]" />
+					<div className="absolute -top-1/4 left-1/2 h-[70vh] w-[90vw] -translate-x-1/2 rounded-full bg-white/15 blur-[120px] in-qvapay-bar:hidden" />
 					<div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/25" />
 				</div>
 

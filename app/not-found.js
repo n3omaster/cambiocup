@@ -10,11 +10,11 @@ export const metadata = {
 export default function NotFound() {
 	return (
 		<main className="bg-delft_blue flex min-h-screen flex-col items-center justify-center p-4 sm:p-8 md:p-12 relative z-20 overflow-hidden">
-			<QvaPayBar subtitle="Página no encontrada" color="#4b5068" />
+			<QvaPayBar subtitle="Página no encontrada" color="#3a405a" />
 
 			{/* Ambient light + vignette */}
 			<div className="pointer-events-none absolute inset-0 z-0" aria-hidden="true">
-				<div className="absolute -top-1/4 left-1/2 h-[70vh] w-[90vw] -translate-x-1/2 rounded-full bg-white/15 blur-[120px]" />
+				<div className="absolute -top-1/4 left-1/2 h-[70vh] w-[90vw] -translate-x-1/2 rounded-full bg-white/15 blur-[120px] in-qvapay-bar:hidden" />
 				<div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/25" />
 			</div>
 
