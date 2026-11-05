@@ -27,10 +27,12 @@ const CORS = {
 	'Access-Control-Expose-Headers': 'X-Next-Cursor',
 }
 
-// `exchange` es append-only: un rango ya cerrado no vuelve a cambiar
-const cacheControl = (settled) => settled
-	? 'public, s-maxage=86400, stale-while-revalidate=604800'
-	: 'public, s-maxage=600, stale-while-revalidate=3600' // el cron escribe cada 10 minutos
+// Vercel consume s-maxage y Cloudflare nunca lo vería, así que el TTL de los CDN viaja en
+// CDN-Cache-Control, que leen los dos. Cache-Control queda para el navegador.
+// Un rango cerrado no cambia: `exchange` es append-only. Lo abierto sigue al cron de 10 minutos.
+const cacheHeaders = (settled) => settled
+	? { 'Cache-Control': 'public, max-age=86400', 'CDN-Cache-Control': 'public, max-age=7776000' }
+	: { 'Cache-Control': 'public, max-age=60', 'CDN-Cache-Control': 'public, max-age=600, stale-while-revalidate=3600' }
 
 const fail = (status, code, message, extra = {}) => NextResponse.json(
 	{ error: { code, message, ...extra } },
@@ -61,7 +63,7 @@ const toCsv = (columns, rows) => [
 
 const respond = ({ coin, interval, format, columns, rows, nextCursor = null, settled }) => {
 
-	const headers = { ...CORS, 'Cache-Control': cacheControl(settled) }
+	const headers = { ...CORS, ...cacheHeaders(settled) }
 	if (nextCursor) headers['X-Next-Cursor'] = nextCursor
 
 	if (format === 'csv') {
