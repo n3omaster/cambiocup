@@ -22,7 +22,7 @@ There are no tests in this project.
 **Tech Stack**: Next.js 16.2 (App Router), React 19.2, Tailwind CSS 4.3 (via `@tailwindcss/postcss`), Supabase JS v2, NumberFlow (animated numbers), Liveline (live chart), OneSignal (push notifications)
 
 **Data Flow**:
-1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` when a coin has no valid completed trade in its last 7 days — low-volume CUPCASH can hit this) are skipped, not saved. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
+1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` when a coin has no valid completed trade in its last 7 days — low-volume CUPCASH can hit this) are skipped, not saved, and so is a coin with one side at `0`, since averaging it stores half the rate. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
 2. **Serve**: `/api` → Returns last 6 entries per coin from database
 3. **Display**: Frontend polls `/api` every 4s → `averageData()` splits first value vs rest average → `randomize()` adds micro-fluctuation → color set by current vs average comparison
 4. **Offers**: `/api/webhook` receives buy/sell offers → `/api/offers` serves recent ones → `FloatingOffers` renders animated bubbles. The same feed also drives live difficulty events in the game
@@ -75,7 +75,9 @@ scripts/
 ├── harden-game-rls.sql        # Paste-into-Supabase script: drops all game_scores RLS policies (service_role-only access)
 ├── fix-score-caps.sql         # Paste-into-Supabase: raises the score_cap/day_cap CHECKs and adds flag_reason. REQUIRED — without it any run over 500k points 500s and is lost
 ├── add-daily-map-ghosts.sql   # Paste-into-Supabase: map_day + trace columns, presence table. Needed for the daily board, ghosts and the live player count
-└── add-public-history-api.sql # Paste-into-Supabase: (coin_id, updated_at) index + exchange_daily() function. Needed for /api/v1/history?interval=1d
+├── add-public-history-api.sql # Paste-into-Supabase: (coin_id, updated_at) index + exchange_daily() function. Needed for /api/v1/history?interval=1d
+├── clean-bad-rates-other-coins.sql # Paste-into-Supabase: removes corrupt rates for every coin but CUP. Safe at any hour
+└── clean-bad-rates-cup.sql    # Paste-into-Supabase: removes corrupt CUP rates. Run right after Havana midnight or replays break
 colors.js                      # Color palettes (malachite, crimson, delft_blue, ghost_white, yale_blue)
 vercel.ts                      # Vercel config (@vercel/config): cron for /api/cron every 10 min
 ```
@@ -107,7 +109,9 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 - **`interval=1d` is a Postgres function** (`exchange_daily`, `scripts/add-public-history-api.sql`) that returns one JSON value, so PostgREST's 1000-row cap doesn't apply. Without the script it answers 503 `HISTORY_UNAVAILABLE`. `interval=raw` only needs the table.
 - **`interval=raw` paginates by keyset on the raw `updated_at`** (base64url in the cursor). It has microseconds, so never pass it through `Date`: truncating to ms repeats or skips rows. `next_cursor` is null only on a short page, so when the total is an exact multiple of `limit` the last page is empty.
 - **Caching**: 10 min for anything open-ended, 1 day for a closed range or a full raw page, since `exchange` is append-only. Errors are `no-store`.
-- **Don't fix bad data by editing `exchange`**: `buildCourse()` is built from those rows, so editing one can re-roll today's map and fail replays in flight. Known suspect: on 2025-09-11 CUP drops from ~462 to ~364 for one 13 h bucket and returns (not checked against raw rows).
+- **Don't fix bad data by editing `exchange`**: `buildCourse()` is built from those rows, so editing one can re-roll today's map and fail replays in flight. CUP rows need the Havana-midnight timing in `scripts/clean-bad-rates-cup.sql`. Other coins are safe at any hour because the game only reads CUP.
+- **Known bad data**: between 2023-12 and 2025-12, 444 rows hold half the real rate (CLASICA 393, MLC 38, CUP 13) and 6 more have a null `value`, all from before `/api/cron` rejected a side at `0`. There are no rows at exactly `0`. The two `scripts/clean-bad-rates-*.sql` scripts list them row by row and copy them to `exchange_removed`. Six other outliers aren't halves and were left in on purpose (CUP in 2023-12, MLC on 2025-12-30).
+- **Sampling density**: CUP has ~48 rows/day until 2025-11 and ~144 since 2025-12, plus 44 days without rows (the largest gap is 2026-05-01 to 2026-05-22).
 - **`value` is not a trade price**: it's `(average_buy + average_sell) / 2` over QvaPay's rolling window (`window_hours: 48` for both CUP and CUPCASH on 2026-11-05). The public `note` field says so, so keep it. `count` and `window_hours` aren't stored.
 
 ### The daily frozen map (and why it matters)
