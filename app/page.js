@@ -12,7 +12,7 @@ import BackgroundLiveLine from './components/BackgroundLiveLine'
 
 // Utils
 import { randomize, averageData, getTimeAgo } from './utils/helpers'
-import { inQvaPay, signalReady, haptic } from './utils/qvapay'
+import { inQvaPay, signalReady, haptic, useQvaPayBar, shareInQvaPay } from './utils/qvapay'
 
 // Config
 const COIN_CONFIG = {
@@ -26,6 +26,12 @@ const COIN_CONFIG = {
 }
 
 const COINS = Object.keys(COIN_CONFIG)
+
+// La barra de QvaPay continúa la página: es el color MEDIDO de su franja superior, no el del
+// token (#0c9c3c…), porque el brillo ambiental la aclara y con el token se vería el corte.
+// Si cambia ese brillo hay que volver a medirlo. ui.colors.set solo acepta hex opaco.
+const BAR_COLORS = { 'bg-malachite': '#21a54d', 'bg-crimson': '#d01c34', 'bg-delft_blue': '#4b5068' }
+const BAR_ACTIONS = [{ id: 'share', icon: 'share', label: 'Compartir la tasa' }]
 
 // The cron saves a row every 10 min; QvaPay answering `0` (no valid trade in the
 // last 7 days — low-volume CASH can hit this) skips the save and freezes the tab
@@ -143,6 +149,17 @@ function HomeContent() {
 
 	const numberFormat = useMemo(() => ({ minimumFractionDigits: decimals, maximumFractionDigits: decimals }), [decimals])
 
+	useQvaPayBar({
+		subtitle: 'Tasas de cambio en Cuba',
+		actions: BAR_ACTIONS,
+		color: BAR_COLORS[bgColor],
+		onAction: (id) => {
+			if (id !== 'share') return
+			const rate = `${coin === 'GAS' ? 'Gasolina' : `Dólar en ${coin}`}: $${value.toFixed(decimals)}${config.unit ? ` ${config.unit}` : ''}`
+			shareInQvaPay(value ? `${rate} hoy en CambioCUP` : 'Las tasas de cambio de Cuba en vivo, en CambioCUP')
+		},
+	})
+
 	return (
 		<>
 			<GlassLensFilter />
@@ -156,8 +173,9 @@ function HomeContent() {
 					<div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/25" />
 				</div>
 
-				<header className='relative z-10 flex flex-col sm:flex-row justify-between items-center gap-3 sm:gap-0'>
-					<div className='flex items-center gap-3'>
+				<header className='relative z-10 flex flex-col sm:flex-row justify-between items-center gap-3 sm:gap-0 in-qvapay-bar:justify-center'>
+					{/* Con la barra de QvaPay esto la duplicaría: lo dice su subtítulo (se queda para lectores de pantalla) */}
+					<div className='flex items-center gap-3 in-qvapay-bar:sr-only'>
 						<h1 className="text-center sm:text-left text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight">Tasas de Cambio en Cuba</h1>
 						<span className="hidden sm:inline-flex items-center gap-2 rounded-full liquid-glass px-3 py-1 text-xs font-medium">
 							<span className="relative flex size-2">

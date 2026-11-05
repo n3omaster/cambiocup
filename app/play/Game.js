@@ -1,14 +1,17 @@
 'use client'
 
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { encodePayload } from '@/app/utils/gameCodec'
-import { useInQvaPay, signalReady, haptic, useQvaPaySession, getQvaPaySession, clearQvaPaySession, qvapayLoginEnabled, loginWithQvaPay } from '@/app/utils/qvapay'
+import { useInQvaPay, signalReady, haptic, useQvaPaySession, getQvaPaySession, clearQvaPaySession, qvapayLoginEnabled, loginWithQvaPay, useQvaPayBar } from '@/app/utils/qvapay'
 import VerifiedBadge from '@/app/components/VerifiedBadge'
 import { DX, STEP, MAGNET_RADIUS, mulberry32, buildCourse, initSim, terrainY as simTerrainY, holeAt as simHoleAt, dayAt, applyResize, applyJump, applyOffers, stepPhysics } from '@/app/utils/gameSim'
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 
 // La física vive en app/utils/gameSim.js (paso fijo STEP, compartida con el
 // verificador de replays del server); aquí quedan render, audio e inputs.
+const BAR_ACTIONS = [{ id: 'records', icon: 'star', label: 'Records' }]
+const BAR_ACTIONS_RUNNING = []
 const BEST_KEY = 'cambiocup:play:best'
 const MUSIC_KEY = 'cambiocup:play:music'
 const NAME_KEY = 'cambiocup:play:name'
@@ -609,6 +612,16 @@ export default function Game() {
 	const [qpError, setQpError] = useState(null)
 	const [showTgForm, setShowTgForm] = useState(false) // dentro de QvaPay, el @ tecleado es la segunda opción
 	const myName = qpSession?.name || playerName
+	const router = useRouter()
+
+	useQvaPayBar({
+		subtitle: qpSession ? `CUP Runner · ${qpSession.name}` : 'CUP Runner',
+		// Sin acciones durante la carrera: un toque de más sacaría al jugador de la partida. El
+		// host tarda en quitarlas, así que tampoco vale un toque que ya venía de camino
+		actions: status === 'playing' ? BAR_ACTIONS_RUNNING : BAR_ACTIONS,
+		color: '#0b0c10',
+		onAction: (id) => { if (id === 'records' && status !== 'playing') router.push('/play/top-scores') },
+	})
 
 	useEffect(() => {
 		if (!inApp) return

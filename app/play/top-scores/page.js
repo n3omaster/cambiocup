@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { getTopScores, countGameRuns } from '@/lib/supabase'
 import VerifiedBadge from '@/app/components/VerifiedBadge'
+import QvaPayBar from '@/app/components/QvaPayBar'
 
 export const revalidate = 30 // el leaderboard se refresca solo cada 30s
 
@@ -40,6 +41,7 @@ export default async function TopScoresPage() {
 
 	return (
 		<div className="min-h-dvh w-full bg-[#0b0c10] text-white">
+			<QvaPayBar subtitle="CUP Runner · Records" color="#0b0c10" />
 			<div className="mx-auto flex max-w-lg flex-col items-center gap-6 px-5 py-10">
 
 				<header className="flex flex-col items-center gap-2 text-center">

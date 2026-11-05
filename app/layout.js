@@ -38,8 +38,10 @@ export const metadata = {
 // Dentro de la app de QvaPay (mini-app) el SDK `window.QvaPay` existe antes de que cargue la
 // página: marcar <html> aquí, antes de pintar, deja que el CSS (`in-qvapay:`) oculte lo que no
 // pinta nada dentro de la app sin parpadeo. El simulador de QvaPay lo inyecta después y avisa
-// con `qvapay:ready`. Ver app/utils/qvapay.js.
-const QVAPAY_FLAG = `(function(){var d=document.documentElement;function m(){if(window.QvaPay)d.setAttribute('data-qvapay','')}m();window.addEventListener('qvapay:ready',m)})()`
+// con `qvapay:ready`. `data-qvapay-bar` marca además que la barra de QvaPay es personalizable
+// (app 3.7.0+): el título propio de la página solo se puede quitar si esa barra lo sustituye.
+// Ver app/utils/qvapay.js.
+const QVAPAY_FLAG = `(function(){var d=document.documentElement;function m(){var q=window.QvaPay;if(!q)return;d.setAttribute('data-qvapay','');if(q.ui&&q.ui.header)d.setAttribute('data-qvapay-bar','')}m();window.addEventListener('qvapay:ready',m)})()`
 
 export default function RootLayout({ children }) {
 	return (

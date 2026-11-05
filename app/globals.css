@@ -2,6 +2,8 @@
 
 /* Dentro de la app de QvaPay (mini-app): <html data-qvapay> lo pone app/layout.js */
 @custom-variant in-qvapay (&:where([data-qvapay], [data-qvapay] *));
+/* Igual, pero solo si la app ya deja personalizar su barra superior (QvaPay 3.7.0+) */
+@custom-variant in-qvapay-bar (&:where([data-qvapay-bar], [data-qvapay-bar] *));
 
 @theme {
 	--font-*: initial;
