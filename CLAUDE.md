@@ -22,7 +22,7 @@ There are no tests in this project.
 **Tech Stack**: Next.js 16.4 (App Router), React 19.3, Tailwind CSS 4.3 (via `@tailwindcss/postcss`), Supabase JS v2, NumberFlow (animated numbers), Liveline (live chart), OneSignal (push notifications)
 
 **Data Flow**:
-1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` when a coin has no valid completed trade in its last 7 days — low-volume CUPCASH can hit this) are skipped, not saved. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
+1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` when a coin has no valid completed trade in its last 7 days — low-volume CUPCASH can hit this) are skipped, not saved, and so is a coin with one side at `0`, since averaging it stores half the rate. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
 2. **Serve**: `/api` → Returns last 6 entries per coin from database
 3. **Display**: Frontend polls `/api` every 4s → `averageData()` splits first value vs rest average → `randomize()` adds micro-fluctuation → color set by current vs average comparison
 4. **Offers**: `/api/webhook` receives buy/sell offers → `/api/offers` serves recent ones → `FloatingOffers` renders animated bubbles. The same feed also drives live difficulty events in the game
@@ -57,6 +57,7 @@ app/
     ├── cron/route.js           # GET → fetch from QvaPay API, save to Supabase
     ├── offers/route.js         # GET → recent offers (last 2 minutes)
     ├── history/route.js        # GET ?coin=CUP&days=7 → chart data
+    ├── v1/history/route.js     # GET → public read-only full history (daily or raw, JSON or CSV). Contract in README.md
     ├── game-history/route.js   # GET ?coin=CUP → bucketed full history + `rev` snapshot id. Edge-cached 1h
     ├── game-score/route.js     # GET → leaderboard / POST → verify replay + save run, returns global rank
     ├── game-token/route.js     # GET → signed HMAC run token (issued when a run starts)
@@ -73,7 +74,10 @@ lib/
 scripts/
 ├── harden-game-rls.sql        # Paste-into-Supabase script: drops all game_scores RLS policies (service_role-only access)
 ├── fix-score-caps.sql         # Paste-into-Supabase: raises the score_cap/day_cap CHECKs and adds flag_reason. REQUIRED — without it any run over 500k points 500s and is lost
-└── add-daily-map-ghosts.sql   # Paste-into-Supabase: map_day + trace columns, presence table. Needed for the daily board, ghosts and the live player count
+├── add-daily-map-ghosts.sql   # Paste-into-Supabase: map_day + trace columns, presence table. Needed for the daily board, ghosts and the live player count
+├── add-public-history-api.sql # Paste-into-Supabase: (coin_id, updated_at) index + exchange_daily() function. Needed for /api/v1/history?interval=1d
+├── clean-bad-rates-other-coins.sql # Paste-into-Supabase: removes corrupt rates for every coin but CUP. Safe at any hour
+└── clean-bad-rates-cup.sql    # Paste-into-Supabase: removes corrupt CUP rates. Run right after Havana midnight or replays break
 colors.js                      # Color palettes (malachite, crimson, delft_blue, ghost_white, yale_blue)
 vercel.ts                      # Vercel config (@vercel/config): cron for /api/cron every 10 min
 ```
@@ -86,6 +90,7 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 | `/api/cron` | GET | — | Fetches 6 coins from QvaPay, saves averages + fixed GAS price to DB (coins answering no data are skipped) |
 | `/api/offers` | GET | — | Returns offers created in last 2 minutes |
 | `/api/history` | GET | `coin`, `days` | Returns `{data: [{time, value}], coin}` — `time` is a unix timestamp in seconds |
+| `/api/v1/history` | GET / OPTIONS | `coin`, `interval`, `from`, `to`, `limit`, `cursor`, `format` | Public read-only history with open CORS. See *Public history API* below; the contract lives in `README.md` |
 | `/api/game-history` | GET | `coin` | Full history for `/play` via `lib/gameHistory.js`, **frozen at Havana midnight**. Returns `{data, coin, rev, mapDay}`. Edge-cached until the next daily cutoff |
 | `/api/game-ghost` | GET | `self`, `exclude` | Best verified run on today's frozen map, with its input trace and resolved offers — the rival you race against |
 | `/api/presence` | GET / POST | POST: `{id, day, score}` | Live player count (`{live, recent}`). Clients beat every 20s while running |
@@ -94,6 +99,20 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 | `/api/og` | GET | `coin` | Generates dynamic Open Graph image with current rate and trend |
 | `/api/og/play` | GET | — | OG card for the game: real CUP terrain (last 60 days), spike, current rate. Edge-cached 1h |
 | `/api/webhook` | POST | `{type, status, value, coin}` | Validates and saves a new offer |
+
+### Public history API
+
+`/api/v1/history` is the only endpoint third parties may rely on (requested in issue #3), so treat `README.md` as a contract: additive changes only under `v1`.
+
+- **Separate route on purpose**: `/api/history` is the chart's contract and stops at the last 1000 rows (~7 days). `getBucketedHistory` is the anti-cheat's contract and must not change for API reasons.
+- **Unknown coins answer 400**, unlike `/api/history` and `/api/game-history`, which fall back to CUP (so `coin=BANDECPREPAGO` there returns CUP data under the wrong label). Here `BANDECPREPAGO` is an alias of `TROPICAL`, and a coin added to `COIN_IDS` becomes public automatically. GAS is excluded because it's a constant.
+- **`interval=1d` is a Postgres function** (`exchange_daily`, `scripts/add-public-history-api.sql`) that returns one JSON value, so PostgREST's 1000-row cap doesn't apply. Without the script it answers 503 `HISTORY_UNAVAILABLE`. `interval=raw` only needs the table.
+- **`interval=raw` paginates by keyset on the raw `updated_at`** (base64url in the cursor). It has microseconds, so never pass it through `Date`: truncating to ms repeats or skips rows. `next_cursor` is null only on a short page, so when the total is an exact multiple of `limit` the last page is empty.
+- **Caching**: the CDN TTL travels in `CDN-Cache-Control` because Vercel consumes `s-maxage`, so Cloudflare would never see it. 10 min for anything open-ended, 90 days for a closed range or a full raw page. Errors are `no-store`. Cloudflare's rule must stay scoped to this path with URI Path (URI Full misses query strings). Its cache survives Vercel deploys, so removing rows from `exchange` also needs a Cloudflare purge.
+- **Don't fix bad data by editing `exchange`**: `buildCourse()` is built from those rows, so editing one can re-roll today's map and fail replays in flight. CUP rows need the Havana-midnight timing in `scripts/clean-bad-rates-cup.sql`. Other coins are safe at any hour because the game only reads CUP.
+- **Known bad data**: between 2023-12 and 2025-12, 444 rows hold half the real rate (CLASICA 393, MLC 38, CUP 13) and 6 more have a null `value`, all from before `/api/cron` rejected a side at `0`. There are no rows at exactly `0`. The two `scripts/clean-bad-rates-*.sql` scripts list them row by row and copy them to `exchange_removed`. Six other outliers aren't halves and were left in on purpose (CUP in 2023-12, MLC on 2025-12-30).
+- **Sampling density**: CUP has ~48 rows/day until 2025-11 and ~144 since 2025-12, plus 44 days without rows (the largest gap is 2026-05-01 to 2026-05-22).
+- **`value` is not a trade price**: it's `(average_buy + average_sell) / 2` over QvaPay's rolling window (`window_hours: 48` for both CUP and CUPCASH on 2026-11-05). The public `note` field says so, so keep it. `count` and `window_hours` aren't stored.
 
 ### The daily frozen map (and why it matters)
 
@@ -220,7 +239,7 @@ cambiocup is also a **mini-app inside the QvaPay mobile app** (row `mini_apps.sl
 
 ## Common Tasks
 
-- **Add a new coin**: Add QvaPay coin name in `api/cron/route.js` (`QVAPAY_COINS`) → Add coin_id in `lib/supabase.js` (COIN_IDS, getCoinData, saveCoinData) → Add entry to `COIN_CONFIG` in `page.js` → Add coin to `validCoins` in `api/webhook/route.js` → Add entry to `COINS` in `api/og/route.js`
+- **Add a new coin**: Add QvaPay coin name in `api/cron/route.js` (`QVAPAY_COINS`) → Add coin_id in `lib/supabase.js` (COIN_IDS, getCoinData, saveCoinData) → Add entry to `COIN_CONFIG` in `page.js` → Add coin to `validCoins` in `api/webhook/route.js` → Add entry to `COINS` in `api/og/route.js`. `/api/v1/history` picks it up from `COIN_IDS` automatically
 - **Change game physics/course**: Edit `app/utils/gameSim.js` — but remember client and server verifier share it (see Anti-cheat gotcha). Keep the collision path free of `Math.sin`/time/randomness
 - **Add a live dynamic**: see *CUP Runner live dynamics* above
 - **Raise the score ceiling**: change `MAX_SCORE`/`MAX_DAY` in `api/game-score/route.js` **and** the matching CHECKs in the DB (`scripts/fix-score-caps.sql`). Changing only one side silently loses runs
