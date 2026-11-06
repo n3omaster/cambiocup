@@ -19,7 +19,7 @@ There are no tests in this project.
 
 ## Architecture
 
-**Tech Stack**: Next.js 16.4 (App Router), React 19.3, Tailwind CSS 4.3 (via `@tailwindcss/postcss`), Supabase JS v2, NumberFlow (animated numbers), Liveline (live chart), OneSignal (push notifications)
+**Tech Stack**: Next.js 16.4 (App Router), React 19.3, Tailwind CSS 4.3 (via `@tailwindcss/postcss`), Supabase JS v2, NumberFlow (animated numbers), Liveline (live chart), web-push (daily push, no third party)
 
 **Data Flow**:
 1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` when a coin has no valid completed trade in its last 7 days — low-volume CUPCASH can hit this) are skipped, not saved, and so is a coin with one side at `0`, since averaging it stores half the rate. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
@@ -28,6 +28,7 @@ There are no tests in this project.
 4. **Offers**: `/api/webhook` receives buy/sell offers → `/api/offers` serves recent ones → `FloatingOffers` renders animated bubbles. The same feed also drives live difficulty events in the game
 5. **Charts**: `/api/history` returns N-day data → `BackgroundLiveLine` renders a full-screen `liveline` chart behind the main content, fed the live randomized value between history refreshes
 6. **Live game dynamics**: every offer that reaches `/api/webhook` becomes an in-game event during a CUP Runner run, and **the coin decides which one** (see Live dynamics below)
+7. **Daily push**: `/api/push/daily` (Vercel cron) sends the rates at 9:00 Havana to every browser in `push_subscriptions` (see Daily push below)
 
 ### Directory Structure
 
@@ -45,6 +46,7 @@ app/
 │   └── top-scores/page.js     # Full leaderboard page (server component, best score per player, top 50, revalidate 30s)
 ├── components/
 │   ├── FloatingOffers.js      # Animated buy/sell offer bubbles (polls /api/offers every 3s)
+│   ├── DailyPush.js           # Footer toggle + 3 s prompt for the daily push
 │   ├── BackgroundLiveLine.js  # Full-screen Liveline chart background (polls /api/history every 30s, 15 days)
 │   ├── VerifiedBadge.js       # "Verificado con QvaPay" badge for leaderboard rows
 │   └── QvaPayBar.js           # useQvaPayBar for server pages: sets QvaPay's top bar, renders nothing
@@ -52,6 +54,7 @@ app/
 │   ├── helpers.js             # randomize(num, deep), dayTrend(current, dayAgo), getTimeAgo(date) (shared by page.js and /api/og)
 │   ├── gameSim.js             # Pure deterministic CUP Runner engine — shared by client AND server replay verifier
 │   ├── gameCodec.js           # XOR-scramble codec for game-score payloads (obfuscation, not crypto)
+│   ├── push.js                # Client side of the daily push: syncPush (silent), enablePush, disablePush, prompt snooze
 │   └── qvapay.js              # Client helper for the QvaPay mini-app SDK (detection, ready, haptics, login/session) — no-op outside the app
 └── api/
     ├── route.js               # GET → last 6 entries per coin + values 24 h ago
@@ -65,12 +68,15 @@ app/
     ├── og/route.js             # GET ?coin=CUP → dynamic OG image (1200×630)
     ├── og/play/route.js        # GET → OG card for /play (real CUP terrain from last 60 days). Edge-cached 1h
     ├── webhook/route.js        # POST → save new offer (type, status, value, coin)
+    ├── push/subscribe/route.js # POST → save browser subscription / DELETE → remove it
+    ├── push/daily/route.js    # GET → daily push, cron only (requires CRON_SECRET)
     └── qvapay-session/route.js # GET → {enabled} / POST {init_data} → verified QvaPay session (mini-app)
 lib/
 ├── supabase.js                # Supabase client + all DB operations
 ├── gameDay.js                 # Daily map freeze: Havana-midnight cutoff + `mapDay` id (handles Cuba's DST, where local midnight doesn't exist one night a year)
 ├── gameToken.js               # Server-only HMAC run tokens for the game (issue/verify) + deriveSecret(label)
 ├── gameHistory.js             # getBucketedHistory(coinId, asOf): parallel pagination past the 1000-row cap, buckets to ~2000 points
+├── push.js                    # Server-only: subscription validation, daily message, send loop
 └── qvapay.js                  # Server-only: QvaPay init_data verification + cambiocup session (mini-app login)
 scripts/
 ├── harden-game-rls.sql        # Paste-into-Supabase script: drops all game_scores RLS policies (service_role-only access)
@@ -78,9 +84,11 @@ scripts/
 ├── add-daily-map-ghosts.sql   # Paste-into-Supabase: map_day + trace columns, presence table. Needed for the daily board, ghosts and the live player count
 ├── add-public-history-api.sql # Paste-into-Supabase: (coin_id, updated_at) index + exchange_daily() function. Needed for /api/v1/history?interval=1d
 ├── clean-bad-rates-other-coins.sql # Paste-into-Supabase: removes corrupt rates for every coin but CUP. Safe at any hour
+├── add-push-subscriptions.sql # Paste-into-Supabase: push_subscriptions + push_sends. Needed for the daily push
 └── clean-bad-rates-cup.sql    # Paste-into-Supabase: removes corrupt CUP rates. Run right after Havana midnight or replays break
 colors.js                      # Color palettes (malachite, crimson, delft_blue, ghost_white, yale_blue)
-vercel.ts                      # Vercel config (@vercel/config): cron for /api/cron every 10 min
+public/push/sw.js              # Service worker of the daily push (scope /push/)
+vercel.ts                      # Vercel config (@vercel/config): crons for /api/cron (every 10 min) and /api/push/daily
 ```
 
 ### API Endpoints
@@ -100,6 +108,8 @@ vercel.ts                      # Vercel config (@vercel/config): cron for /api/c
 | `/api/og` | GET | `coin` | Generates dynamic Open Graph image with current rate and trend |
 | `/api/og/play` | GET | — | OG card for the game: real CUP terrain (last 60 days), spike, current rate. Edge-cached 1h |
 | `/api/webhook` | POST | `{type, status, value, coin}` | Validates and saves a new offer |
+| `/api/push/subscribe` | POST / DELETE | POST: browser `PushSubscription` JSON. DELETE: `{endpoint}` | Saves or removes a subscription. Endpoints outside `PUSH_HOSTS` answer 400 |
+| `/api/push/daily` | GET | `Authorization: Bearer $CRON_SECRET` | Sends today's push if it's the window and today wasn't sent. Closed (401) when `CRON_SECRET` is unset |
 
 ### Public history API
 
@@ -164,6 +174,20 @@ The game's score submission is verified by **deterministic re-simulation**, not 
 
 **Gotcha**: any change to `gameSim.js` physics or to `buildCourse()` changes what the server reproduces — client and server must always run the same version, and in-flight runs straddling a deploy will fail verification (land in the honeypot). Same applies to the bucketing logic in `lib/gameHistory.js`.
 
+### Daily push (own web push)
+
+`/api/push/daily` sends CUP, its 24 h trend, MLC and CASH to every row in `push_subscriptions`, using `web-push` and our VAPID keys. No Firebase project or third party is involved: the browser's push service only needs VAPID.
+
+- **The worker lives in `/push/` on purpose**, so it controls no page and can coexist with any worker in `/`. That's also why `navigator.serviceWorker.ready` never resolves for it, and `register()` in `app/utils/push.js` waits on the installing worker instead.
+- **Subscribing**: notification permission belongs to the origin, so `syncPush()` subscribes anyone with `granted` without a dialog, unless they turned it off (`cambiocup:push:off`, which must be respected because the permission stays granted). Everyone else gets the prompt at 3 s, snoozed 14 days by "No gracias...". The browser dialog only comes after "Si, dale!", because a block there can't be asked again. `enablePush()` calls `subscribe()` directly since Safari requires the gesture and `requestPermission()` first would spend it. A first subscription can take ~30 s on a new Chrome profile, hence "Un momento...".
+- **Timing**: Vercel crons are UTC and Cuba changes clocks, so the cron runs `*/10 13-15` and `inSendWindow()` decides (9:00–10:59 Havana). Vercel can skip or repeat a run: the next attempt in the window recovers a skipped one, and the `push_sends` primary key is the lock against repeats. Everything that can fail goes **before** claiming the day (stale rates, failed reads). After the claim there's no retry; `finished_at` empty means an interrupted send.
+- **`410` is not always final**: a new subscription can answer `410` for up to ~9 s and then work, and one just unsubscribed can alternate `410` and `201`. So `404`/`410` only deletes rows older than `GONE_MIN_AGE_MS`. `403`, `429` and `5xx` never delete. `201` means accepted, not delivered.
+- **`tag: 'daily-rate'` needs `renotify: true`**: without it, today's push silently replaces yesterday's if that one is still in the tray.
+- **`PUSH_HOSTS` is the SSRF guard**, because the cron POSTs to every stored endpoint. A browser on a service that isn't listed fails to subscribe and logs `[push] servicio de push no admitido`.
+- **iPhone** only exposes push to the site installed on the Home Screen, which is why `site.webmanifest` is linked. There's no hint telling iPhone users to install it yet.
+- **Leaving OneSignal** (in progress): `public/OneSignalSDKWorker.js` stays so its dashboard can send one last notice, and the page no longer loads its SDK. Its subscriptions can't be imported: they answer `403` without OneSignal's VAPID private key, so they only move by opening the site. To finish, replace that file with a worker that unregisters itself. Deleting it isn't enough: the update answers `404` and the old worker stays registered. Both workers go out with `no-store` (`next.config.js`) because Cloudflare's zone would otherwise give them a year of browser cache. Only then delete the OneSignal project.
+- **Tested** with real pushes through Chrome's service on desktop. Safari, Firefox and Android aren't verified.
+
 ### Database Schema (Supabase)
 
 **`exchange` table** — Historical exchange rates (append-only, `updated_at` monotonic):
@@ -176,6 +200,12 @@ The game's score submission is verified by **deterministic re-simulation**, not 
 **`game_scores` table** — CUP Runner leaderboard (one row per finished run):
 - `id`, `name` (Telegram handle, normalized `@lowercase`), `score` (int), `day` (int), `flagged` (bool, honeypot rows — excluded from all reads), `flag_reason` (text, why it was flagged — null when clean), `nonce` (text, run-token nonce; partial unique index makes tokens single-use), `map_day` (date, which frozen map it was played on), `trace` (jsonb, input trace — verified runs only, powers ghosts), `created_at`
 - `saveGameScore` retries without the newer columns on PGRST204/42703, so a deploy that lands before its migration loses the extras but never the run
+
+**`push_subscriptions` table** — one row per subscribed browser (`scripts/add-push-subscriptions.sql`):
+- `id`, `endpoint` (unique), `p256dh`, `auth`, `created_at`. RLS on with no policies, so only `service_role` reads it
+
+**`push_sends` table** — one row per Havana day, created before sending:
+- `day` (primary key, the lock), `started_at`, `finished_at`, `sent`, `gone`, `failed`
 
 **`presence` table** — who is running right now:
 - `id` (client-generated session id), `last_seen`, `day`, `score`. Alive = seen in the last 45s; rows older than 10 min are swept on read
@@ -208,7 +238,6 @@ Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders ne
 - **Font**: Barlow (weights: 500, 800, 900) loaded via `next/font/google`
 - **Number animation**: `@number-flow/react` with 500ms duration, ease-out easing
 - **URL param**: `?nocode=true` hides the iframe embed button (used when page is embedded)
-- **OneSignal**: Push notifications initialized on mount (AppID: `04dffeef-fbcd-4c21-95fc-eb358400eff2`)
 - **OG images**: Dynamic generation with `next/og` ImageResponse — `/api/og` is `force-dynamic` + no-cache; `/api/og/play` is edge-cached 1h
 
 ## External APIs
@@ -225,6 +254,8 @@ SUPABASE_KEY=<supabase-key>   # service_role if the RLS hardening script has bee
 
 Optional: `GAME_SCORE_SECRET` — HMAC secret for game run tokens (falls back to `SUPABASE_KEY`)
 
+Optional (daily push, see above): `NEXT_PUBLIC_VAPID_PUBLIC_KEY` + `VAPID_PRIVATE_KEY` (`npx web-push generate-vapid-keys`) and `CRON_SECRET`. The public key is inlined at build time, so a change needs a new deploy. Without them the footer toggle doesn't show and `/api/push/daily` answers 401 or 503. `CRON_SECRET` also protects `/api/cron` when set. Rotating the VAPID keys loses every subscriber.
+
 Optional (QvaPay mini-app login, see below): `QVAPAY_APP_UUID` + `QVAPAY_APP_SECRET` — uuid and secret of the QvaPay App that owns the `cambiocup` mini-app. Server-only. Without them `/api/qvapay-session` answers 503 and the game keeps the typed Telegram @ flow.
 
 ## QvaPay mini-app
@@ -232,7 +263,7 @@ Optional (QvaPay mini-app login, see below): `QVAPAY_APP_UUID` + `QVAPAY_APP_SEC
 cambiocup is also a **mini-app inside the QvaPay mobile app** (row `mini_apps.slug = 'cambiocup'` in QvaPay, `entry_url` `https://www.cambiocup.com/?nocode=true`). The app opens it in a WebView and injects the SDK `window.QvaPay` *before* the page loads (the QvaPay `/dev` simulator injects it later and fires `qvapay:ready`). Outside the app nothing of this exists and the site behaves exactly as before.
 
 - **Detection**: one client helper, `app/utils/qvapay.js` (`qp()`, `inQvaPay()`, `useInQvaPay()`, `signalReady()`, `haptic()`, session store, `loginWithQvaPay()`); every function is a no-op outside the app. An inline `<head>` script in `app/layout.js` sets `<html data-qvapay>` before paint, and the Tailwind variant `in-qvapay:` (`@custom-variant` in `globals.css`) hides things without flashing: the iframe-embed button (home) and the share-card download button (blob downloads do nothing in the WebView). Share links (WhatsApp/Telegram/X) stay: the WebView hands them to the system.
-- **Inside the app**: `QvaPay.ready()` on mount (removes the native loader), **no OneSignal init** (no web push in a WebView), discreet haptics — `light` on coin change, `success`/`error` when a run ends (success on win or new local record), `success` when the submitted rank is top 10. Never per jump or per frame.
+- **Inside the app**: `QvaPay.ready()` on mount (removes the native loader), **no daily push** (no web push in a WebView), discreet haptics — `light` on coin change, `success`/`error` when a run ends (success on win or new local record), `success` when the submitted rank is top 10. Never per jump or per frame.
 - **Top bar**: the bar is QvaPay's (logo, name, left button close/back on their own); we only set subtitle, up to 2 actions and color, through `useQvaPayBar({ subtitle, actions, color, onAction })` in `app/utils/qvapay.js`, or `<QvaPayBar>` from server pages. Detected by feature, never by version: `ui.header` needs app 3.7.0 and `ui.colors` 3.7.1. Both are host state that survives navigation, so **every page must declare its bar**: a new page without one inherits the previous page's subtitle, color and actions. `data-qvapay-bar` on `<html>` (set with `data-qvapay`, only if `ui.header` exists) plus the Tailwind variant `in-qvapay-bar:` remove what the bar replaces (the home `h1`, kept as `sr-only`); older apps keep it. Bar colors are the page's theme tokens from `globals.css`, and the ambient glow is hidden inside the app (`in-qvapay-bar:hidden`) so nothing separates page and bar. Don't tune them by measuring pixels: the same glow lightens the top row in desktop Chrome and desktop WebKit but barely shows on a real iPhone, so a measured color left a visible band on the device. `/play`: the `records` action is removed while `status === 'playing'` **and** ignored in the handler, since the host removes it asynchronously and a tap already in flight would lose the run. Icons come from a closed catalog with no "play" icon; invalid params reject with `INVALID_PARAMS`, logged as `[qvapay]`. The closed contract lives in the native app (`~/apps/QvaPay/miniapps/protocol.ts`, `sdkScript.ts`).
 - **Verified identity in CUP Runner**: "Entrar con QvaPay" → `QvaPay.auth.requestLogin({ scopes: ['profile'] })` → `init_data` → `POST /api/qvapay-session` (`GET` answers `{enabled}` so the button only shows when configured). `lib/qvapay.js` verifies it with QvaPay's exact algorithm (qpweb `scripts/miniapps/sign.js`: `secret_key = HMAC_SHA256("QvaPayMiniApp", app_secret)`, `hash = hex(HMAC_SHA256(secret_key, sorted "k=v" lines))`, timing-safe, `auth_date` ≤ 600 s) and also requires `app_uuid === QVAPAY_APP_UUID` and `mini_app === 'cambiocup'`. It returns a cambiocup session `{token, name, exp}` (2 h, HMAC with a subkey of the game secret via `deriveSecret()` in `lib/gameToken.js`), kept in memory + sessionStorage. The mini-app row in QvaPay must allow the `profile` scope (the username only travels with it).
 - **Score submit**: the client adds `qp: <session token>` to the payload. With a valid session the server **ignores the typed name**, uses the verified `@username` (lowercase; QvaPay usernames have their own looser regex, `verifiedName()`), and stores `qvapay_uuid` + `verified = true`. An invalid/expired session answers 401 `QVAPAY_SESSION_INVALID` (not the honeypot): the client drops it and shows the login button again, which re-submits on success. Anti-cheat (token, replay, honeypot) is unchanged — identity is an extra field, never part of the verification. No prizes or money move here.

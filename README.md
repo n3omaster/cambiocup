@@ -46,7 +46,7 @@
 - **🟢🔴 Semáforo de tendencia** — verde cuando la tasa está por debajo del promedio reciente, rojo cuando está por encima
 - **📊 Gráfica viva de fondo** — 15 días de historia renderizados a pantalla completa detrás del precio
 - **💬 Ofertas flotantes** — las compras y ventas reales aparecen como burbujas animadas según ocurren
-- **🔔 Notificaciones push** — vía OneSignal
+- **🔔 Aviso diario** — una notificación push cada mañana con las tasas, con sistema propio
 - **🪟 Widget embebible** — un iframe para llevar la tasa a cualquier web
 - **🧊 Liquid Glass UI** — lente de vidrio con mapa de desplazamiento SVG, al estilo iOS
 - **🎮 CUP Runner** — un juego de correr construido sobre la historia real de la tasa (sigue leyendo 👇)

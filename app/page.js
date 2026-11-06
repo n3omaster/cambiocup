@@ -1,18 +1,18 @@
 'use client'
 
 import Link from 'next/link'
-import OneSignal from 'react-onesignal'
 import NumberFlow from '@number-flow/react'
 import { useSearchParams } from 'next/navigation'
 import { Suspense, useState, useEffect, useCallback, useMemo } from 'react'
 
 // Components
+import DailyPush from './components/DailyPush'
 import FloatingOffers from './components/FloatingOffers'
 import BackgroundLiveLine from './components/BackgroundLiveLine'
 
 // Utils
 import { randomize, dayTrend, getTimeAgo } from './utils/helpers'
-import { inQvaPay, signalReady, haptic, useQvaPayBar, shareInQvaPay } from './utils/qvapay'
+import { signalReady, haptic, useQvaPayBar, shareInQvaPay } from './utils/qvapay'
 
 // Config
 const COIN_CONFIG = {
@@ -80,12 +80,8 @@ function HomeContent() {
 	const decimals = config.decimals
 	const bgColor = TREND_COLORS[trend?.state ?? 'stable']
 
-	useEffect(() => {
-		// Dentro de la app de QvaPay no hay push web (el WebView no lo tiene) y la app ya avisa
-		// por su cuenta: solo se le dice que la página está lista para quitar su loader
-		if (inQvaPay()) { signalReady(); return }
-		OneSignal.init({ appId: '04dffeef-fbcd-4c21-95fc-eb358400eff2' })
-	}, [])
+	// Dentro de la app de QvaPay quita su loader nativo; fuera de ella no hace nada
+	useEffect(() => { signalReady() }, [])
 
 	useEffect(() => {
 		// SVG filters in backdrop-filter only render in Chromium; everyone else keeps the CSS glass
@@ -285,7 +281,10 @@ function HomeContent() {
 				</div>
 
 				<footer className='relative z-10 flex flex-col sm:flex-row justify-between items-center gap-2 sm:gap-0 text-xs sm:text-sm md:text-base text-white/80'>
-					<div className='text-center sm:text-left'><p suppressHydrationWarning>{new Date().getFullYear()} - Todos los derechos reservados</p></div>
+					<div className='text-center sm:text-left'>
+						<p suppressHydrationWarning>{new Date().getFullYear()} - Todos los derechos reservados</p>
+						<DailyPush />
+					</div>
 					<div className='flex items-center gap-4'>
 						<a href='https://x.com/qvapay' target='_blank' rel='noopener noreferrer' className='hover:text-white transition-colors' aria-label='X (Twitter)'>
 							<svg className="size-5" fill="currentColor" viewBox="0 0 24 24">

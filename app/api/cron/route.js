@@ -20,7 +20,13 @@ const fetchAverage = async (coin) => {
 	return (average_buy + average_sell) / 2
 }
 
-export async function GET() {
+export async function GET(request) {
+	// Solo si CRON_SECRET está definido: exigirlo siempre pararía las tasas al desplegar sin la variable
+	const secret = process.env.CRON_SECRET
+	if (secret && request.headers.get('authorization') !== `Bearer ${secret}`) {
+		return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+	}
+
 	try {
 		const [cupAvg, mlcAvg, clasicaAvg, etecsaAvg, bandecprepagoAvg, cupcashAvg] = await Promise.all(QVAPAY_COINS.map(fetchAverage))
 		const result = await saveCoinData(cupAvg, mlcAvg, clasicaAvg, etecsaAvg, bandecprepagoAvg, GAS_PRICE, cupcashAvg)
