@@ -24,6 +24,9 @@ export default function Privacy() {
 					We do not store or process any personal data through this website. Our website is designed to provide information without the need to collect personal information from its visitors.
 				</p>
 				<p className="mt-4">
+					Daily Rate Notifications: If you turn on the daily notification, we store the push address your browser gives us, only to send you that notification. It does not identify you, and it is deleted when you turn the notification off.
+				</p>
+				<p className="mt-4">
 					Third-Party Services: We do not share any data with third-party services, nor do we use third-party services that collect information on our behalf.
 				</p>
 				<p className="mt-4">

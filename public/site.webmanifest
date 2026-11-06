@@ -1,6 +1,10 @@
 {
-    "name": "",
-    "short_name": "",
+    "name": "CambioCUP",
+    "short_name": "CambioCUP",
+    "description": "Tasas de cambio de Cuba en tiempo real",
+    "id": "/",
+    "start_url": "/",
+    "lang": "es",
     "icons": [
         {
             "src": "/android-chrome-192x192.png",
@@ -13,7 +17,7 @@
             "type": "image/png"
         }
     ],
-    "theme_color": "#ffffff",
-    "background_color": "#ffffff",
+    "theme_color": "#3a405a",
+    "background_color": "#3a405a",
     "display": "standalone"
 }
