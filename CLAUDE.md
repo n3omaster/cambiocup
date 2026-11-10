@@ -237,7 +237,7 @@ Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders ne
 - **Liquid Glass UI**: `.liquid-glass` (+ `--dark/--emerald/--red` variants) in `globals.css`, driven by an SVG displacement-map `backdrop-filter` defined in `page.js` (`GlassLensFilter`); edges sample inward to avoid Chrome edge-clamp streaks
 - **Font**: Barlow (weights: 500, 800, 900) loaded via `next/font/google`
 - **Number animation**: `@number-flow/react` with 500ms duration, ease-out easing
-- **URL param**: `?nocode=true` hides the iframe embed button (used when page is embedded)
+- **URL params**: `?nocode=true` hides the iframe embed button and `?nogame=true` hides the "Jugar" button, independently (used when the page is embedded). There is no automatic iframe detection. QvaPay's mini-app `entry_url` carries only `nocode`, so the game stays available there; the snippet from the embed modal carries neither
 - **OG images**: Dynamic generation with `next/og` ImageResponse — `/api/og` is `force-dynamic` + no-cache; `/api/og/play` is edge-cached 1h
 
 ## External APIs
