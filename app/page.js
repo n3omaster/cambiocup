@@ -67,6 +67,7 @@ function HomeContent() {
 
 	const searchParams = useSearchParams()
 	const noCode = searchParams.get('nocode') === 'true'
+	const noGame = searchParams.get('nogame') === 'true'
 
 	const [coin, setCoin] = useState('CUP')
 	const [value, setValue] = useState(0)
@@ -184,17 +185,19 @@ function HomeContent() {
 						</span>
 					</div>
 					<div className="flex items-center gap-2 sm:gap-3">
-						<Link
-							href="/play"
-							className="inline-flex items-center gap-2 text-white px-4 py-2 sm:py-2.5 rounded-2xl liquid-glass hover:scale-105 active:scale-95 text-sm sm:text-base font-bold"
-							aria-label="Jugar CUP Runner"
-							title="Jugar CUP Runner"
-						>
-							<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" fill="currentColor" viewBox="0 0 24 24">
-								<path d="M8 5.14v13.72c0 .8.87 1.3 1.56.88l11.2-6.86a1.03 1.03 0 000-1.76L9.56 4.26A1.03 1.03 0 008 5.14z" />
-							</svg>
-							Jugar
-						</Link>
+						{!noGame && (
+							<Link
+								href="/play"
+								className="inline-flex items-center gap-2 text-white px-4 py-2 sm:py-2.5 rounded-2xl liquid-glass hover:scale-105 active:scale-95 text-sm sm:text-base font-bold"
+								aria-label="Jugar CUP Runner"
+								title="Jugar CUP Runner"
+							>
+								<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" fill="currentColor" viewBox="0 0 24 24">
+									<path d="M8 5.14v13.72c0 .8.87 1.3 1.56.88l11.2-6.86a1.03 1.03 0 000-1.76L9.56 4.26A1.03 1.03 0 008 5.14z" />
+								</svg>
+								Jugar
+							</Link>
+						)}
 						{!noCode && (
 							<button
 								type="button"
