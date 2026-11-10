@@ -41,8 +41,11 @@ export const metadata = {
 // pinta nada dentro de la app sin parpadeo. El simulador de QvaPay lo inyecta después y avisa
 // con `qvapay:ready`. `data-qvapay-bar` marca además que la barra de QvaPay es personalizable
 // (app 3.7.0+): el título propio de la página solo se puede quitar si esa barra lo sustituye.
-// Ver app/utils/qvapay.js.
-const QVAPAY_FLAG = `(function(){var d=document.documentElement;function m(){var q=window.QvaPay;if(!q)return;d.setAttribute('data-qvapay','');if(q.ui&&q.ui.header)d.setAttribute('data-qvapay-bar','')}m();window.addEventListener('qvapay:ready',m)})()`
+// El SDK del simulador (qvapay.com/dev y la ficha en admin) lo cargamos nosotros, y solo si quien
+// nos abre en un iframe es QvaPay: sdk-sim.js define `window.QvaPay` en CUALQUIER iframe, así que
+// sin ese filtro el widget embebido en otras webs se comportaría como si estuviera en la app.
+// Los hosts son los mismos que acepta sdk-sim.js. Ver app/utils/qvapay.js.
+const QVAPAY_FLAG = `(function(){var d=document.documentElement;function m(){var q=window.QvaPay;if(!q)return;d.setAttribute('data-qvapay','');if(q.ui&&q.ui.header)d.setAttribute('data-qvapay-bar','')}m();window.addEventListener('qvapay:ready',m);if(window.parent===window||window.QvaPay)return;try{var a=location.ancestorOrigins,h=new URL(a&&a.length?a[0]:document.referrer).hostname;if(['www.qvapay.com','qvapay.com','localhost','127.0.0.1'].indexOf(h)<0)return;var s=document.createElement('script');s.src='https://www.qvapay.com/miniapps/sdk-sim.js';document.head.appendChild(s)}catch(e){}})()`
 
 export default function RootLayout({ children }) {
 	return (
