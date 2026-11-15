@@ -267,9 +267,13 @@ main {
    así que el feed sube por encima del 25 % inferior, y crece un 20 % porque se ve en un teléfono
    y comprimido. `bottom` es la única regla que hay que tocar para afinar la posición viendo el
    directo: el contenido de la página le deja sitio solo, con el padding inferior de <main>
-   (STREAM_FEED_ROOM en app/page.js), que sale de estas mismas tres líneas. */
+   (STREAM_FEED_ROOM en app/page.js), que sale de estas mismas tres líneas.
+   Va centrado a cualquier ancho, como el precio y sus chips: el feed es una caja de ancho cero en
+   el 50 %, cada fila se corre la mitad de su ancho y la escala crece desde ese mismo punto. */
 .offer-feed[data-stream="true"] {
 	--offer-scale: 1.2;
+	--offer-x: -50%;
+	left: 50%;
 	bottom: 25.5vh;
 	--offer-top-slot: 2;
 	transform: scale(var(--offer-scale));
@@ -325,14 +329,10 @@ main {
 	opacity: 0.35;
 }
 
-/* En móvil solo se ven tres, y centradas. En modo stream no se centran: se quedan a la izquierda,
-   que es la posición medida contra el chip de variación y los comentarios del directo */
+/* En móvil solo se ven tres, y centradas (en modo stream ya lo están a cualquier ancho) */
 @media (max-width: 639px) {
 	.offer-feed {
 		--offer-top-slot: 2;
-	}
-
-	.offer-feed:not([data-stream="true"]) {
 		left: 50%;
 		--offer-x: -50%;
 	}
