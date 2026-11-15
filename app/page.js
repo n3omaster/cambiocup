@@ -48,6 +48,11 @@ const FETCH_TIMEOUT_MS = 10000
 // Mitad del cambio de moneda al rotar: se va la anterior, entra la nueva
 const FADE_MS = 200
 
+// Sitio que el feed de ofertas necesita en stream por encima del 25 % inferior: sus tres líneas
+// (3 × 2.75rem × 1.2, ver .offer-feed[data-stream] en globals.css) y un respiro. El precio se
+// centra en lo que queda, así que ningún chip acaba debajo de una oferta
+const STREAM_FEED_ROOM = 'pb-[calc(25.5vh+11.25rem)]'
+
 const coinLabel = (coin) => (coin === 'GAS' ? 'Gasolina' : `Dólar en ${coin}`)
 
 // Displacement map for the Liquid Glass lens: R channel encodes X shift, G encodes Y
@@ -279,7 +284,7 @@ function HomeContent() {
 			{view.offers && <OfferFeed rates={rates} fx={view.fx} stream={view.stream} onPickCoin={view.stream ? undefined : pickCoin} />}
 			{/* En stream el contenido vive en la franja que Telegram no tapa: arriba pinta el avatar
 			    y el nombre (~12%), abajo los comentarios (~25%). Estimado, a ajustar con el live real */}
-			<main className={`${bgColor} ${view.stream ? 'h-dvh px-4 pt-[12vh] pb-[25vh]' : 'min-h-screen p-4 sm:p-8 md:p-12'} flex flex-col justify-between relative z-20 overflow-hidden`}>
+			<main className={`${bgColor} ${view.stream ? `h-dvh px-4 pt-[12vh] ${view.offers ? STREAM_FEED_ROOM : 'pb-[25vh]'}` : 'min-h-screen p-4 sm:p-8 md:p-12'} flex flex-col justify-between relative z-20 overflow-hidden`}>
 				{view.chart && <BackgroundLiveLine coin={coin} value={value} opacity={0.3} low={lowFx} />}
 
 				{/* Ambient light + vignette */}

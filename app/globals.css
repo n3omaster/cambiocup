@@ -254,13 +254,20 @@ main {
 }
 
 /* Modo stream (?stream=true): abajo a la izquierda Telegram pinta los comentarios del Live Story,
-   así que el feed sube por encima del 25 % inferior. Es la única regla que hay que tocar para
-   afinar la posición viendo el directo. El margen es estrecho: a 540x960 y sin pie, el chip de
-   variación acaba en y=586 y las tres líneas ocupan 126 px, así que `bottom` solo cabe entre
-   25vh y 25.8vh. Para subirlo más hay que dejar dos líneas (--offer-top-slot: 1). */
+   así que el feed sube por encima del 25 % inferior, y crece un 20 % porque se ve en un teléfono
+   y comprimido. `bottom` es la única regla que hay que tocar para afinar la posición viendo el
+   directo: el contenido de la página le deja sitio solo, con el padding inferior de <main>
+   (STREAM_FEED_ROOM en app/page.js), que sale de estas mismas tres líneas. */
 .offer-feed[data-stream="true"] {
+	--offer-scale: 1.2;
 	bottom: 25.5vh;
 	--offer-top-slot: 2;
+	transform: scale(var(--offer-scale));
+	transform-origin: left bottom;
+}
+
+.offer-feed[data-stream="true"] .offer-row {
+	max-width: calc((100vw - 1.5rem) / var(--offer-scale));
 }
 
 .offer-row {
@@ -407,7 +414,7 @@ main {
    un Chrome sin GPU (la transmisión 24/7), donde backdrop-filter, blur y las sombras difusas
    se recalculan enteros en cada frame. Cada superficie tiene su variante; van sin capa para
    ganarle a las utilidades de Tailwind. */
-[data-fx='low'] .liquid-glass {
+html[data-fx='low'] .liquid-glass {
 	/* Sin desenfoque detrás, el vidrio se sostiene con un poco más de tinte y su borde de luz */
 	background: rgba(255, 255, 255, 0.14);
 	-webkit-backdrop-filter: none;
@@ -415,49 +422,50 @@ main {
 	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
-[data-fx='low'] .liquid-glass--dark {
+html[data-fx='low'] .liquid-glass--dark {
 	background: rgba(0, 0, 0, 0.22);
 	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
 /* El brillo ambiental era un óvalo desenfocado 120px: un degradado radial da lo mismo ya pintado */
-[data-fx='low'] .ambient-glow {
+html[data-fx='low'] .ambient-glow {
 	filter: none;
 	background: radial-gradient(closest-side, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0));
 }
 
 /* El precio cambia en cada refresco: un drop-shadow de 50px encima se recalcula con cada dígito */
-[data-fx='low'] .rate-price {
+html[data-fx='low'] .rate-price {
 	filter: none;
 	text-shadow: 0 0.03em 0 rgba(0, 0, 0, 0.18);
 }
 
 /* El fundido del fondo repinta la pantalla entera durante medio segundo: aquí cambia de golpe,
    y al rotar coincide con el momento en que el contenido está oculto */
-[data-fx='low'] main {
+html[data-fx='low'] main {
 	transition: none;
 }
 
 /* Red de seguridad para lo que no tenga variante propia (el velo del modal, por ejemplo) */
-[data-fx='low'] * {
+html[data-fx='low'] * {
 	-webkit-backdrop-filter: none !important;
 	backdrop-filter: none !important;
 }
 
 /* ?stream=true (<html data-stream>): nadie interactúa. Sin cursor, sin scroll y sin :hover,
-   que un puntero aparcado encima de algo dejaría encendido para siempre. */
-[data-stream],
-[data-stream] body {
+   que un puntero aparcado encima de algo dejaría encendido para siempre. Con `html` delante:
+   el feed de ofertas lleva sus propios data-stream y data-fx, y sin él estas reglas lo recortarían. */
+html[data-stream],
+html[data-stream] body {
 	overflow: hidden;
 	scrollbar-width: none;
 }
 
-[data-stream] ::-webkit-scrollbar {
+html[data-stream] ::-webkit-scrollbar {
 	display: none;
 }
 
-[data-stream],
-[data-stream] * {
+html[data-stream],
+html[data-stream] * {
 	cursor: none !important;
 	pointer-events: none !important;
 }
