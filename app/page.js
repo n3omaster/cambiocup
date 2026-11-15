@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import NumberFlow from '@number-flow/react'
 import { useSearchParams } from 'next/navigation'
-import { Suspense, useState, useEffect, useCallback, useMemo } from 'react'
+import { Suspense, useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 
 // Components
 import DailyPush from './components/DailyPush'
@@ -42,6 +42,19 @@ const BAR_ACTIONS = [{ id: 'share', icon: 'share', label: 'Compartir la tasa' }]
 // last 7 days — low-volume CASH can hit this) skips the save and freezes the tab
 const STALE_MS = 30 * 60 * 1000
 
+// Una petición colgada no puede frenar el refresco de una página abierta días seguidos
+const FETCH_TIMEOUT_MS = 10000
+
+// Mitad del cambio de moneda al rotar: se va la anterior, entra la nueva
+const FADE_MS = 200
+
+// Sitio que el feed de ofertas necesita en stream por encima del 25 % inferior: sus tres líneas
+// (3 × 2.75rem × 1.2, ver .offer-feed[data-stream] en globals.css) y un respiro. El precio se
+// centra en lo que queda, así que ningún chip acaba debajo de una oferta
+const STREAM_FEED_ROOM = 'pb-[calc(25.5vh+11.25rem)]'
+
+const coinLabel = (coin) => (coin === 'GAS' ? 'Gasolina' : `Dólar en ${coin}`)
+
 // Displacement map for the Liquid Glass lens: R channel encodes X shift, G encodes Y
 // (128 = neutral). Edges sample INWARD (rim compression, like iOS) — sampling outward
 // would read past the element's backdrop buffer and Chrome clamps the edge rows,
@@ -68,18 +81,28 @@ function GlassLensFilter() {
 function HomeContent() {
 
 	const searchParams = useSearchParams()
+	// Todo lo que la URL puede encender o apagar sale de aquí (lib/viewParams.js)
 	const view = useMemo(() => parseViewParams(searchParams, { coins: COINS }), [searchParams])
-	const noCode = !view.code
-	const noGame = !view.game
+	const lowFx = view.fx === 'low'
 
-	const [coin, setCoin] = useState('CUP')
+	const [coin, setCoin] = useState(view.currency)
 	const [value, setValue] = useState(0)
 	const [trend, setTrend] = useState(null) // { pct, state } frente a hace 24 h
 	const [noData, setNoData] = useState(false)
 	const [staleAgo, setStaleAgo] = useState(null)
 	const [rates, setRates] = useState(NO_RATES) // tasa real por moneda, para el feed de ofertas
+	const [loaded, setLoaded] = useState(false)
+	const [fading, setFading] = useState(false)
 	const [showModal, setShowModal] = useState(false)
 	const [copied, setCopied] = useState(false)
+	const [embedGame, setEmbedGame] = useState(true)
+	const [embedCoin, setEmbedCoin] = useState(COINS[0])
+
+	// La última respuesta buena de /api trae todas las monedas: cambiar de moneda la pinta al
+	// momento, sin esperar otra petición
+	const ratesRef = useRef(null)
+	const coinRef = useRef(view.currency)
+	const tabsRef = useRef(null)
 
 	const config = COIN_CONFIG[coin]
 	const decimals = config.decimals
@@ -88,24 +111,85 @@ function HomeContent() {
 	// Dentro de la app de QvaPay quita su loader nativo; fuera de ella no hace nada
 	useEffect(() => { signalReady() }, [])
 
+	// <html data-stream data-fx data-theme>: de ahí cuelga el CSS de cada variante (globals.css).
+	// Antes de pintar, y se retira al salir de la home para no arrastrarlo a /play
+	useLayoutEffect(() => {
+		const root = document.documentElement
+		const attrs = { 'data-stream': view.stream ? 'true' : null, 'data-fx': lowFx ? 'low' : null, 'data-theme': view.theme }
+		for (const [name, val] of Object.entries(attrs)) if (val) root.setAttribute(name, val)
+		return () => { for (const name of Object.keys(attrs)) root.removeAttribute(name) }
+	}, [view.stream, view.theme, lowFx])
+
 	useEffect(() => {
+		// fx=low no usa la lente: sin GPU es de lo más caro de pintar
+		if (lowFx) return
 		// SVG filters in backdrop-filter only render in Chromium; everyone else keeps the CSS glass
 		if (window.chrome && CSS.supports('backdrop-filter', 'url(#glass-lens)')) {
 			document.documentElement.classList.add('glass-refract')
 		}
+	}, [lowFx])
+
+	const show = useCallback((data, name) => {
+		const coinConfig = COIN_CONFIG[name]
+		const history = data[coinConfig.historyKey]
+
+		// Lectura fallida de esa moneda: se queda lo que ya había en pantalla
+		if (!Array.isArray(history)) return
+
+		if (!history.length) {
+			// Coin without market data yet (e.g. CASH before its first valid cash trade) —
+			// reset so the previous coin's value doesn't linger on screen
+			setValue(0)
+			setTrend(null)
+			setNoData(true)
+			setStaleAgo(null)
+			return
+		}
+
+		const first = history[0]
+
+		// El ruido es solo para el número: el color y el chip salen del dato real, o
+		// cambiarían al azar en cada refresco (el ruido llega a ser 20 veces el movimiento real)
+		setValue(Number.parseFloat(randomize(first.value, coinConfig.deep)))
+		setTrend(dayTrend(first.value, data.dayAgo?.[coinConfig.historyKey]))
+		setNoData(false)
+		setStaleAgo(Date.now() - new Date(first.updated_at) > STALE_MS ? getTimeAgo(first.updated_at) : null)
 	}, [])
 
-	useEffect(() => {
+	const selectCoin = useCallback((name) => {
+		coinRef.current = name
+		setCoin(name)
+		setFading(false)
+		// La pestaña activa al centro de su tira. A mano y no con scrollIntoView, que también
+		// desplaza a los ancestros: con ?rotate en un iframe movería la página que lo inserta
+		const strip = tabsRef.current
+		const tab = strip?.querySelector(`[data-coin="${name}"]`)
+		if (tab) {
+			const box = strip.getBoundingClientRect()
+			const at = tab.getBoundingClientRect()
+			strip.scrollTo({ left: strip.scrollLeft + at.left - box.left - (box.width - at.width) / 2, behavior: 'smooth' })
+		}
+		if (ratesRef.current) show(ratesRef.current, name)
+		else setNoData(false) // clear the previous coin's "sin datos" chip until the first fetch resolves
+	}, [show])
 
-		const config = COIN_CONFIG[coin]
+	useEffect(() => {
+		let busy = false
 
 		const tick = async () => {
+			// Si la anterior sigue en vuelo no se apila otra
+			if (busy) return
+			busy = true
 			try {
 
-				const response = await fetch('/api')
+				const response = await fetch('/api', { signal: AbortSignal.timeout?.(FETCH_TIMEOUT_MS) })
+				if (!response.ok) throw new Error(`HTTP ${response.status}`)
 				const data = await response.json()
+				// Una lectura fallida llega sin historia: se reintenta en el siguiente ciclo y en
+				// pantalla sigue el último dato bueno
+				if (!Array.isArray(data?.cupHistory)) throw new Error('respuesta sin tasas')
 
-				// Solo cambia cada 10 min: se conserva el mismo objeto para no repintar el feed cada 4 s
+				// Solo cambia cada 10 min: se conserva el mismo objeto para no repintar el feed en cada refresco
 				const next = {}
 				for (const name of COINS) {
 					const real = data[COIN_CONFIG[name].historyKey]?.[0]?.value
@@ -113,33 +197,41 @@ function HomeContent() {
 				}
 				setRates((prev) => (COINS.every((name) => prev[name] === next[name]) ? prev : next))
 
-				const history = data[config.historyKey]
-				if (!history?.length) {
-					// Coin without market data yet (e.g. CASH before its first valid cash trade) —
-					// reset so the previous coin's value doesn't linger on screen
-					setValue(0)
-					setTrend(null)
-					setNoData(true)
-					setStaleAgo(null)
-					return
-				}
+				ratesRef.current = data
+				show(data, coinRef.current)
+				setLoaded(true)
+				// Señal para el watchdog del servidor de la transmisión
+				if (view.stream) window.__lastDataUpdate = Date.now()
 
-				const first = history[0]
-
-				// El ruido es solo para el número: el color y el chip salen del dato real, o
-				// cambiarían al azar cada 4 s (el ruido llega a ser 20 veces el movimiento real)
-				setValue(Number.parseFloat(randomize(first.value, config.deep)))
-				setTrend(dayTrend(first.value, data.dayAgo?.[config.historyKey]))
-				setNoData(false)
-				setStaleAgo(Date.now() - new Date(first.updated_at) > STALE_MS ? getTimeAgo(first.updated_at) : null)
-
-			} catch (err) { console.error('Error fetching rates:', err) }
+			} catch (err) { console.error('Error fetching rates:', err) } finally { busy = false }
 		}
 
 		tick()
-		const interval = setInterval(tick, 4000)
+		const interval = setInterval(tick, view.poll * 1000)
 		return () => clearInterval(interval)
-	}, [coin])
+	}, [view.poll, view.stream, show])
+
+	// Para el watchdog: la primera carga terminó y ya está en el DOM
+	useEffect(() => {
+		if (view.stream && loaded) window.__streamReady = true
+	}, [view.stream, loaded])
+
+	// ?rotate=N: pasa sola a la siguiente moneda con datos. Depende de `coin`, así que un toque
+	// en una pestaña reinicia la cuenta desde esa moneda
+	useEffect(() => {
+		if (!view.rotate) return
+		let swap
+		const timer = setTimeout(() => {
+			const rates = ratesRef.current
+			const from = COINS.indexOf(coin)
+			const order = COINS.map((_, i) => COINS[(from + 1 + i) % COINS.length])
+			const next = order.find((name) => !rates || rates[COIN_CONFIG[name].historyKey]?.length) ?? coin
+			if (next === coin) return
+			setFading(true)
+			swap = setTimeout(() => selectCoin(next), FADE_MS)
+		}, view.rotate * 1000)
+		return () => { clearTimeout(timer); clearTimeout(swap) }
+	}, [coin, view.rotate, selectCoin])
 
 	useEffect(() => {
 		if (!showModal) return
@@ -148,16 +240,17 @@ function HomeContent() {
 		return () => window.removeEventListener('keydown', handleEscape)
 	}, [showModal])
 
-	// Cambia de moneda desde el selector o tocando una oferta del feed
+	// Desde el selector o tocando una oferta del feed. No depende de `coin`, así que el feed
+	// (memo) no se repinta con cada cambio de moneda
 	const pickCoin = useCallback((name) => {
 		if (!COIN_CONFIG[name]) return
-		if (name !== coin) haptic('light')
-		setCoin(name)
-		setNoData(false) // clear the previous coin's "sin datos" chip until the new fetch resolves
-		document.querySelector(`[data-coin="${name}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
-	}, [coin])
+		if (name !== coinRef.current) haptic('light')
+		selectCoin(name)
+	}, [selectCoin])
 
-	const iframeCode = `<iframe src="${typeof window !== 'undefined' ? window.location.origin : 'https://www.cambiocup.com'}" width="100%" height="600" frameborder="0" allowfullscreen style="border-radius: 5px;"></iframe>`
+	// Dentro de un iframe el botón de insertar no pinta nada: el snippet siempre lleva nocode
+	const embedQuery = `?nocode=true${embedGame ? '' : '&nogame=true'}${embedCoin === COINS[0] ? '' : `&currency=${embedCoin}`}`
+	const iframeCode = `<iframe src="${typeof window !== 'undefined' ? window.location.origin : 'https://www.cambiocup.com'}/${embedQuery}" width="100%" height="600" frameborder="0" allowfullscreen style="border-radius: 5px;"></iframe>`
 
 	const copyToClipboard = useCallback(async () => {
 		try {
@@ -167,6 +260,8 @@ function HomeContent() {
 		} catch (err) { console.error('Error al copiar:', err) }
 	}, [iframeCode])
 
+	const chipSize = view.stream ? 'px-5 py-2 text-[length:min(4vw,2.3vh)]' : 'px-4 py-1.5 text-xs sm:text-sm'
+
 	const numberFormat = useMemo(() => ({ minimumFractionDigits: decimals, maximumFractionDigits: decimals }), [decimals])
 
 	useQvaPayBar({
@@ -175,26 +270,30 @@ function HomeContent() {
 		color: BAR_COLORS[bgColor],
 		onAction: (id) => {
 			if (id !== 'share') return
-			const rate = `${coin === 'GAS' ? 'Gasolina' : `Dólar en ${coin}`}: $${value.toFixed(decimals)}${config.unit ? ` ${config.unit}` : ''}`
+			const rate = `${coinLabel(coin)}: $${value.toFixed(decimals)}${config.unit ? ` ${config.unit}` : ''}`
 			shareInQvaPay(value ? `${rate} hoy en CambioCUP` : 'Las tasas de cambio de Cuba en vivo, en CambioCUP')
 		},
 	})
 
 	return (
 		<>
-			<GlassLensFilter />
+			{/* La variante de transmisión no es una página para buscadores */}
+			{view.stream && <meta name="robots" content="noindex" />}
+			{!lowFx && <GlassLensFilter />}
 			{/* En modo stream no hay nadie que toque una oferta, y la moneda la lleva la rotación */}
 			{view.offers && <OfferFeed rates={rates} fx={view.fx} stream={view.stream} onPickCoin={view.stream ? undefined : pickCoin} />}
-			<main className={bgColor + " flex min-h-screen flex-col justify-between p-4 sm:p-8 md:p-12 relative z-20 overflow-hidden"}>
-				<BackgroundLiveLine coin={coin} value={value} opacity={0.3} />
+			{/* En stream el contenido vive en la franja que Telegram no tapa: arriba pinta el avatar
+			    y el nombre (~12%), abajo los comentarios (~25%). Estimado, a ajustar con el live real */}
+			<main className={`${bgColor} ${view.stream ? `h-dvh px-4 pt-[12vh] ${view.offers ? STREAM_FEED_ROOM : 'pb-[25vh]'}` : 'min-h-screen p-4 sm:p-8 md:p-12'} flex flex-col justify-between relative z-20 overflow-hidden`}>
+				{view.chart && <BackgroundLiveLine coin={coin} value={value} opacity={0.3} low={lowFx} />}
 
 				{/* Ambient light + vignette */}
 				<div className="pointer-events-none absolute inset-0 z-0" aria-hidden="true">
-					<div className="absolute -top-1/4 left-1/2 h-[70vh] w-[90vw] -translate-x-1/2 rounded-full bg-white/15 blur-[120px] in-qvapay-bar:hidden" />
+					<div className="ambient-glow absolute -top-1/4 left-1/2 h-[70vh] w-[90vw] -translate-x-1/2 rounded-full bg-white/15 blur-[120px] in-qvapay-bar:hidden" />
 					<div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/25" />
 				</div>
 
-				<header className='relative z-10 flex flex-col sm:flex-row justify-between items-center gap-3 sm:gap-0 in-qvapay-bar:justify-center'>
+				{!view.stream && <header className='relative z-10 flex flex-col sm:flex-row justify-between items-center gap-3 sm:gap-0 in-qvapay-bar:justify-center'>
 					{/* Con la barra de QvaPay esto la duplicaría: lo dice su subtítulo (se queda para lectores de pantalla) */}
 					<div className='flex items-center gap-3 in-qvapay-bar:sr-only'>
 						<h1 className="text-center sm:text-left text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight">Tasas de Cambio en Cuba</h1>
@@ -207,7 +306,7 @@ function HomeContent() {
 						</span>
 					</div>
 					<div className="flex items-center gap-2 sm:gap-3">
-						{!noGame && (
+						{view.game && (
 							<Link
 								href="/play"
 								className="inline-flex items-center gap-2 text-white px-4 py-2 sm:py-2.5 rounded-2xl liquid-glass hover:scale-105 active:scale-95 text-sm sm:text-base font-bold"
@@ -220,7 +319,7 @@ function HomeContent() {
 								Jugar
 							</Link>
 						)}
-						{!noCode && (
+						{view.code && (
 							<button
 								type="button"
 								onClick={() => setShowModal(true)}
@@ -235,13 +334,17 @@ function HomeContent() {
 							</button>
 						)}
 					</div>
-				</header>
+				</header>}
 
 				<div className="relative z-10 flex-1 flex flex-col items-center justify-center px-2 sm:px-4">
 
-					{/* Coin selector — glass segmented control (single scrollable row on mobile) */}
+					{/* En stream no hay nada que tocar: la marca ocupa el sitio de las pestañas */}
+					{view.stream ? (
+						<p className="mb-[3vh] text-[length:min(4.5vw,2.6vh)] font-medium tracking-tight text-white/75">cambiocup.com · Tasas de cambio en Cuba</p>
+					) : (
+					/* Coin selector — glass segmented control (single scrollable row on mobile) */
 					<div className="mb-6 sm:mb-10 max-w-full rounded-full liquid-glass p-1.5">
-						<div className="flex gap-1 overflow-x-auto no-scrollbar snap-x rounded-full">
+						<div ref={tabsRef} className="flex gap-1 overflow-x-auto no-scrollbar snap-x rounded-full">
 							{COINS.map((name) => (
 								<button
 									key={name}
@@ -259,9 +362,20 @@ function HomeContent() {
 							))}
 						</div>
 					</div>
+					)}
 
-					<h2 className="text-6xl sm:text-8xl md:text-8xl lg:text-[10rem] xl:text-[12rem] font-extrabold text-white text-center tracking-tighter drop-shadow-[0_10px_50px_rgba(0,0,0,0.3)]">
+					{/* Lo que cambia con la moneda. Al rotar se va y vuelve con opacity/translate, lo único
+					    que no obliga a repintar */}
+					<div className={`flex max-w-full flex-col items-center transition-[opacity,translate] duration-200 ease-out ${fading ? 'opacity-0 translate-y-3' : ''}`}>
+
+					{view.stream && (
+						<p className="mb-[1vh] text-[length:min(8vw,4.5vh)] font-extrabold leading-none tracking-tight text-white">{coinLabel(coin)}</p>
+					)}
+
+					<h2 className={`rate-price ${view.stream ? 'text-[length:min(17vw,12vh)] leading-none' : 'text-6xl sm:text-8xl md:text-8xl lg:text-[10rem] xl:text-[12rem]'} font-extrabold text-white text-center tracking-tighter drop-shadow-[0_10px_50px_rgba(0,0,0,0.3)]`}>
 						<NumberFlow
+							// Al rotar el número entra ya con su valor: girar de 1.017 a 1,2 en pleno fundido solo ensucia
+							key={view.rotate ? coin : 'rate'}
 							value={value}
 							format={numberFormat}
 							prefix="$"
@@ -272,24 +386,24 @@ function HomeContent() {
 					</h2>
 
 					{/* Context chips: unit + trend */}
-					<div className="mt-5 sm:mt-8 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+					<div className={`${view.stream ? 'mt-[3vh]' : 'mt-5 sm:mt-8'} flex flex-wrap items-center justify-center gap-2 sm:gap-3`}>
 						{config.unit && (
-							<span className="rounded-full liquid-glass px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90">
+							<span className={`rounded-full liquid-glass ${chipSize} font-medium text-white/90`}>
 								{config.unit}
 							</span>
 						)}
 						{noData && (
-							<span className="rounded-full liquid-glass px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90">
+							<span className={`rounded-full liquid-glass ${chipSize} font-medium text-white/90`}>
 								Sin datos de mercado todavía
 							</span>
 						)}
 						{staleAgo && (
-							<span className="rounded-full liquid-glass px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90">
+							<span className={`rounded-full liquid-glass ${chipSize} font-medium text-white/90`}>
 								Sin operaciones recientes · último dato {staleAgo}
 							</span>
 						)}
 						{trend && trend.pct !== null && (
-							<span className="inline-flex items-center gap-1.5 rounded-full liquid-glass liquid-glass--dark px-4 py-1.5 text-xs sm:text-sm font-medium text-white/90 tabular-nums">
+							<span className={`inline-flex items-center gap-1.5 rounded-full liquid-glass liquid-glass--dark ${chipSize} font-medium text-white/90 tabular-nums`}>
 								{trend.state === 'stable' ? 'Estable en 24 h' : (
 									<>
 										<span aria-hidden="true">{trend.pct < 0 ? '▼' : '▲'}</span>
@@ -299,12 +413,13 @@ function HomeContent() {
 							</span>
 						)}
 					</div>
+					</div>
 				</div>
 
-				<footer className='relative z-10 flex flex-col sm:flex-row justify-between items-center gap-2 sm:gap-0 text-xs sm:text-sm md:text-base text-white/80'>
+				{view.footer && <footer className='relative z-10 flex flex-col sm:flex-row justify-between items-center gap-2 sm:gap-0 text-xs sm:text-sm md:text-base text-white/80'>
 					<div className='text-center sm:text-left'>
 						<p suppressHydrationWarning>{new Date().getFullYear()} - Todos los derechos reservados</p>
-						<DailyPush />
+						<DailyPush prompt={view.push} />
 					</div>
 					<div className='flex items-center gap-4'>
 						<a href='https://x.com/qvapay' target='_blank' rel='noopener noreferrer' className='hover:text-white transition-colors' aria-label='X (Twitter)'>
@@ -319,8 +434,11 @@ function HomeContent() {
 						</a>
 					</div>
 					<div className='text-center sm:text-right'><p>Cambio CUP - Un servicio de <a href='https://www.qvapay.com' target='_blank' rel='noopener noreferrer' className='underline hover:text-white transition-colors'>QvaPay</a></p></div>
-				</footer>
+				</footer>}
 			</main>
+
+			{/* Sin footer no hay interruptor, pero el aviso de los 3 s es otro parámetro (push) */}
+			{!view.footer && view.push && <DailyPush toggle={false} />}
 
 			{/* Modal */}
 			{showModal && (
@@ -345,7 +463,7 @@ function HomeContent() {
 								Copia y pega este código HTML en tu página web para insertar este widget:
 							</p>
 							<div className="relative">
-								<pre className="border border-gray-200 p-4 rounded-2xl whitespace-pre-wrap break-all text-sm" style={{ backgroundColor: '#f9fafb', color: '#111827' }}>
+								<pre className="border border-gray-200 p-4 pr-14 rounded-2xl whitespace-pre-wrap break-all text-sm" style={{ backgroundColor: '#f9fafb', color: '#111827' }}>
 									<code style={{ color: '#111827' }}>{iframeCode}</code>
 								</pre>
 								<button type="button" onClick={copyToClipboard} className="absolute top-2 right-2 p-2 rounded-xl transition-all flex items-center justify-center bg-yale_blue/65 hover:bg-yale_blue backdrop-blur-sm shadow-sm" style={{ color: '#ffffff' }} aria-label={copied ? '¡Copiado!' : 'Copiar'} title={copied ? '¡Copiado!' : 'Copiar'}>
@@ -359,6 +477,18 @@ function HomeContent() {
 										</svg>
 									)}
 								</button>
+							</div>
+							<div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm" style={{ color: '#111827' }}>
+								<label className="inline-flex items-center gap-2">
+									<input type="checkbox" checked={embedGame} onChange={(e) => setEmbedGame(e.target.checked)} />
+									Mostrar el botón Jugar
+								</label>
+								<label className="inline-flex items-center gap-2">
+									Moneda inicial
+									<select value={embedCoin} onChange={(e) => setEmbedCoin(e.target.value)} className="rounded-lg border border-gray-200 px-2 py-1" style={{ backgroundColor: '#ffffff', color: '#111827' }}>
+										{COINS.map((name) => <option key={name} value={name}>{name}</option>)}
+									</select>
+								</label>
 							</div>
 							<div className="mt-4 p-4 rounded-2xl border border-gray-200" style={{ backgroundColor: '#f9fafb' }}>
 								<p className="text-sm" style={{ color: '#111827' }}>

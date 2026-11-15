@@ -51,6 +51,53 @@
 - **🧊 Liquid Glass UI** — lente de vidrio con mapa de desplazamiento SVG, al estilo iOS
 - **🎮 CUP Runner** — un juego de correr construido sobre la historia real de la tasa (sigue leyendo 👇)
 
+## 🎛️ Parámetros de la URL
+
+La home acepta parámetros para encender o apagar cada parte. Sirven para el widget embebido, para la mini-app y para transmitir la página sin nadie delante.
+
+| Parámetro | Valores | Por defecto | Efecto |
+|---|---|---|---|
+| `stream` | `true` | apagado | Modo transmisión (ver abajo) |
+| `code` | `true` / `false` | `true` | Botón del código para insertar el widget |
+| `game` | `true` / `false` | `true` | Botón "Jugar" |
+| `push` | `true` / `false` | `true` | Aviso que ofrece la notificación diaria |
+| `offers` | `true` / `false` | `true` | Ofertas flotantes |
+| `footer` | `true` / `false` | `true` | Pie de página |
+| `chart` | `true` / `false` | `true` | Gráfica de fondo |
+| `currency` | `CUP`, `CASH`, `MLC`, `CLASICA`, `ETECSA`, `TROPICAL`, `GAS` | `CUP` | Moneda inicial |
+| `rotate` | segundos (mínimo 5), `0` para apagar | apagado | Pasa sola de una moneda a la siguiente |
+| `theme` | `dark` / `light` | el del sistema | Fuerza el tema |
+| `fx` | `full` / `low` | `full` | `low` quita los efectos caros de pintar sin GPU |
+| `poll` | segundos (mínimo 30) | 4 | Cada cuánto se piden las tasas |
+
+- Los booleanos también aceptan `1` y `0`. Un valor que no se entiende se ignora y queda el valor por defecto.
+- `nocode=true` y `nogame=true` siguen funcionando igual que siempre (equivalen a `code=false` y `game=false`). Si llegan los dos estilos, gana el nuevo.
+- `rotate` y `poll` por debajo del mínimo se suben al mínimo. La rotación se salta las monedas que no tienen datos.
+- `push=false` no guarda nada en el navegador: no cuenta como un "No gracias".
+
+```
+https://www.cambiocup.com/?nocode=true&currency=MLC
+https://www.cambiocup.com/?offers=false&footer=false&rotate=15
+```
+
+### Modo transmisión
+
+`?stream=true` deja la página lista para capturarla en vídeo (por ejemplo, una Live Story de Telegram en vertical). Equivale a:
+
+```
+code=false game=false push=false footer=false theme=dark fx=low rotate=10
+```
+
+Las ofertas en vivo se quedan (se quitan con `offers=false`). Además quita el título y las pestañas, oculta el cursor y el scroll, agranda la tipografía, deja libres el 12% superior y el 25% inferior de la pantalla, y marca la página como `noindex`. Cualquier parámetro explícito gana al preset:
+
+```
+https://www.cambiocup.com/?stream=true
+https://www.cambiocup.com/?stream=true&rotate=15&currency=MLC
+https://www.cambiocup.com/?stream=true&chart=false
+```
+
+En este modo la página deja dos señales para quien la vigile desde fuera: `window.__streamReady` (`true` cuando la primera carga ya está en pantalla) y `window.__lastDataUpdate` (el `Date.now()` de la última lectura buena de las tasas). Si una lectura falla, se queda el último dato y se reintenta en el siguiente ciclo.
+
 ## 🎮 CUP Runner
 
 <div align="center">

@@ -3,6 +3,7 @@
 import { memo, useState, useEffect } from 'react'
 
 const POLL_MS = 3000
+const FETCH_TIMEOUT_MS = 10000
 const MAX_VISIBLE = 4 // en móvil y en modo stream la cuarta queda invisible (globals.css)
 const LIFE_MS = 6000
 const EXIT_MS = 350 // lo que dura el fundido de salida en globals.css (.offer-pill)
@@ -111,17 +112,29 @@ export default memo(function OfferFeed({ rates, fx = 'full', stream = false, onP
 			if (!pumping) pump()
 		}
 
+		// La página se transmite días seguidos: una consulta colgada no puede apilar otras detrás,
+		// y con la pestaña oculta no se pide lo que no se va a publicar
+		let busy = false
 		const poll = async () => {
+			if (busy || document.hidden) return
+			busy = true
 			try {
-				const response = await fetch('/api/offers')
+				const response = await fetch('/api/offers', { signal: AbortSignal.timeout?.(FETCH_TIMEOUT_MS) })
+				if (!response.ok) throw new Error(`HTTP ${response.status}`)
 				const data = await response.json()
 				if (cancelled || !Array.isArray(data.offers)) return
 				enqueue(data.offers)
-			} catch (error) { console.error('Error fetching offers:', error) }
+			} catch (error) { console.error('Error fetching offers:', error) } finally { busy = false }
 		}
 
-		// Con la pestaña oculta no se publica nada; al volver sale lo último que quedó en cola
-		const onVisible = () => { if (!document.hidden && !pumping) pump() }
+		// Con la pestaña oculta ni se consulta ni se publica; al volver se pide lo último
+		const onVisible = () => {
+			if (document.hidden) return
+			// Como al abrir: solo lo más nuevo, sin repasar lo que pasó mientras no se miraba
+			firstLoad = true
+			poll()
+			if (!pumping) pump()
+		}
 
 		poll()
 		const interval = setInterval(poll, POLL_MS)
