@@ -10,7 +10,9 @@ const PROMPT_DELAY_MS = 3000
 // Interruptor del aviso diario en el pie de la home, y el aviso que lo ofrece a los 3 s. Pedir el
 // permiso del navegador solo tras "Si, dale!" evita gastar su diálogo con quien iba a decir que no:
 // si lo rechaza en el navegador, la web ya no puede volver a preguntarle.
-export default function DailyPush() {
+// `toggle`: el interruptor del pie. `prompt`: el aviso de los 3 s (?push=false lo quita sin
+// tocar localStorage: no es un "No gracias" del usuario).
+export default function DailyPush({ toggle = true, prompt = true }) {
 	const [state, setState] = useState('unsupported')
 	const [prompting, setPrompting] = useState(false)
 	const [busy, setBusy] = useState(false)
@@ -23,10 +25,10 @@ export default function DailyPush() {
 		syncPush().then((next) => {
 			if (cancelled) return
 			setState(next)
-			if (shouldPrompt(next)) timer = setTimeout(() => setPrompting(true), PROMPT_DELAY_MS)
+			if (prompt && shouldPrompt(next)) timer = setTimeout(() => setPrompting(true), PROMPT_DELAY_MS)
 		})
 		return () => { cancelled = true; clearTimeout(timer) }
-	}, [])
+	}, [prompt])
 
 	const run = async (action) => {
 		setPrompting(false)
@@ -39,7 +41,7 @@ export default function DailyPush() {
 
 	return (
 		<>
-			<button
+			{toggle && <button
 				type="button"
 				disabled={busy}
 				onClick={() => run(state === 'on' ? disablePush : enablePush)}
@@ -47,7 +49,7 @@ export default function DailyPush() {
 			>
 				{/* La primera suscripción puede tardar decenas de segundos: el aviso ya se cerró y sin esto no pasaría nada visible */}
 				{busy ? 'Un momento...' : state === 'on' ? 'Desactivar aviso diario' : 'Recibir aviso diario'}
-			</button>
+			</button>}
 
 			{prompting && createPortal(
 				<div className="fixed inset-x-4 bottom-4 z-40 flex justify-center sm:bottom-8">

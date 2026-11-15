@@ -119,6 +119,22 @@
 	}
 }
 
+/* ?theme=dark|light: fuerza el tema sin mirar prefers-color-scheme (<html data-theme> lo pone
+   app/page.js). Tiene que ganarle a la media query de arriba en los dos sentidos. */
+:root[data-theme='dark'] {
+	color-scheme: dark;
+	--foreground-rgb: 255, 255, 255;
+	--background-start-rgb: 0, 0, 0;
+	--background-end-rgb: 0, 0, 0;
+}
+
+:root[data-theme='light'] {
+	color-scheme: light;
+	--foreground-rgb: 0, 0, 0;
+	--background-start-rgb: 214, 219, 220;
+	--background-end-rgb: 255, 255, 255;
+}
+
 body {
 	color: rgb(var(--foreground-rgb));
 }
@@ -385,4 +401,63 @@ main {
 	.offer-pill--shine::after {
 		display: none;
 	}
+}
+
+/* ?fx=low (<html data-fx="low">): la misma página sin lo que cuesta pintar por CPU. Pensado para
+   un Chrome sin GPU (la transmisión 24/7), donde backdrop-filter, blur y las sombras difusas
+   se recalculan enteros en cada frame. Cada superficie tiene su variante; van sin capa para
+   ganarle a las utilidades de Tailwind. */
+[data-fx='low'] .liquid-glass {
+	/* Sin desenfoque detrás, el vidrio se sostiene con un poco más de tinte y su borde de luz */
+	background: rgba(255, 255, 255, 0.14);
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+[data-fx='low'] .liquid-glass--dark {
+	background: rgba(0, 0, 0, 0.22);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+/* El brillo ambiental era un óvalo desenfocado 120px: un degradado radial da lo mismo ya pintado */
+[data-fx='low'] .ambient-glow {
+	filter: none;
+	background: radial-gradient(closest-side, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0));
+}
+
+/* El precio cambia en cada refresco: un drop-shadow de 50px encima se recalcula con cada dígito */
+[data-fx='low'] .rate-price {
+	filter: none;
+	text-shadow: 0 0.03em 0 rgba(0, 0, 0, 0.18);
+}
+
+/* El fundido del fondo repinta la pantalla entera durante medio segundo: aquí cambia de golpe,
+   y al rotar coincide con el momento en que el contenido está oculto */
+[data-fx='low'] main {
+	transition: none;
+}
+
+/* Red de seguridad para lo que no tenga variante propia (el velo del modal, por ejemplo) */
+[data-fx='low'] * {
+	-webkit-backdrop-filter: none !important;
+	backdrop-filter: none !important;
+}
+
+/* ?stream=true (<html data-stream>): nadie interactúa. Sin cursor, sin scroll y sin :hover,
+   que un puntero aparcado encima de algo dejaría encendido para siempre. */
+[data-stream],
+[data-stream] body {
+	overflow: hidden;
+	scrollbar-width: none;
+}
+
+[data-stream] ::-webkit-scrollbar {
+	display: none;
+}
+
+[data-stream],
+[data-stream] * {
+	cursor: none !important;
+	pointer-events: none !important;
 }

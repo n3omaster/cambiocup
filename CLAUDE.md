@@ -12,10 +12,11 @@ CambioCUP is a real-time Cuban currency exchange rate tracker displaying live ra
 npm run dev      # Development server (Turbopack is default in Next.js 16)
 npm run build    # Production build
 npm run start    # Start production server
+npm test         # Unit tests of lib/viewParams.js (node:test, no dependencies)
 npm run lint     # ESLint flat config (v9) with nextVitals — stays on v9 because eslint-plugin-react 7.37.5 (pulled by eslint-config-next, checked at 16.4.5) only declares support up to ^9.7. v10 does run on 16.4.5 (the old `scopeManager.addGlobals is not a function` crash is gone) but with a peer warning
 ```
 
-There are no tests in this project.
+The only tests are the ones for the URL parameter parser (`lib/viewParams.test.mjs`, `.mjs` because `package.json` has no `"type": "module"`).
 
 ## Architecture
 
@@ -73,7 +74,7 @@ app/
     └── qvapay-session/route.js # GET → {enabled} / POST {init_data} → verified QvaPay session (mini-app)
 lib/
 ├── supabase.js                # Supabase client + all DB operations
-├── viewParams.js              # parseViewParams(): pure parser of the home's URL params (stream, offers, fx, nocode...). Tests in viewParams.test.mjs (`node --test lib/viewParams.test.mjs`)
+├── viewParams.js              # parseViewParams(): every URL parameter of the home (pure, tested). Contract in README.md
 ├── gameDay.js                 # Daily map freeze: Havana-midnight cutoff + `mapDay` id (handles Cuba's DST, where local midnight doesn't exist one night a year)
 ├── gameToken.js               # Server-only HMAC run tokens for the game (issue/verify) + deriveSecret(label)
 ├── gameHistory.js             # getBucketedHistory(coinId, asOf): parallel pagination past the 1000-row cap, buckets to ~2000 points
@@ -250,7 +251,13 @@ Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders ne
 - **Liquid Glass UI**: `.liquid-glass` (+ `--dark` variant) in `globals.css`, driven by an SVG displacement-map `backdrop-filter` defined in `page.js` (`GlassLensFilter`); edges sample inward to avoid Chrome edge-clamp streaks
 - **Font**: Barlow (weights: 500, 800, 900) loaded via `next/font/google`
 - **Number animation**: `@number-flow/react` with 500ms duration, ease-out easing
-- **URL params**: parsed by `parseViewParams()` in `lib/viewParams.js`. `?nocode=true` hides the iframe embed button and `?nogame=true` hides the "Jugar" button, independently (used when the page is embedded). `page.js` also honors `offers`, `fx` and `stream` for the offer feed; the parser's other fields (`footer`, `theme`, `rotate`, `poll`, `currency`, `chart`, `push`) aren't wired yet. There is no automatic iframe detection. QvaPay's mini-app `entry_url` carries only `nocode`, so the game stays available there; the snippet from the embed modal carries neither
+- **URL params**: every parameter of the home is parsed in `lib/viewParams.js` (`parseViewParams`, pure and tested) and documented in `README.md` ("Parámetros de la URL"): `stream`, `code`, `game`, `push`, `offers`, `footer`, `chart`, `currency`, `rotate`, `theme`, `fx`, `poll`. Precedence is defaults → `stream` preset → explicit parameters. `?nocode=true` / `?nogame=true` keep their original meaning (exact `true` only). There is no automatic iframe detection. QvaPay's mini-app `entry_url` carries only `nocode`, so the game stays available there; the snippet from the embed modal always carries `nocode=true`. Add a new parameter in the parser, never with `searchParams.get` in a component
+- **Stream mode** (`?stream=true`): the home captured as a 24/7 Telegram Live Story by a headless Chrome **without GPU** at 540x960 DPR 2 (the capture pipeline lives in another repo). `page.js` sets `data-stream`, `data-fx` and `data-theme` on `<html>` (removed on unmount so `/play` doesn't inherit them) and the CSS for each hangs from those attributes at the end of `globals.css`. Things that aren't obvious:
+  - `fx=low` exists because everything is painted by CPU there: no `backdrop-filter`, no blur, no large shadows, and the background color cuts instead of fading. `BackgroundLiveLine` draws at half resolution scaled 2x and with ~300 points: without GPU the canvas is drawn on the main thread, and that was the difference between ~50 and 60 fps with 6x CPU throttling. Any new effect needs a `[data-fx='low']` variant
+  - The content sits between 12% from the top and 25% from the bottom (Telegram's own UI covers the rest). Those two numbers are an estimate to adjust against the real live
+  - `window.__streamReady` and `window.__lastDataUpdate` are read by the server's watchdog: don't rename them
+  - The rate poll keeps the last good data when `/api` fails (a failed Supabase read arrives as `null` histories, not as an error) and never stacks requests
+  - `rotate` skips coins without data and changes coin with a 200 ms fade out and in (`FADE_MS`); `/api` already returns every coin, so a coin change paints from `ratesRef` without another request
 - **OG images**: Dynamic generation with `next/og` ImageResponse — `/api/og` is `force-dynamic` + no-cache; `/api/og/play` is edge-cached 1h
 
 ## External APIs
@@ -291,7 +298,7 @@ cambiocup is also a **mini-app inside the QvaPay mobile app** (row `mini_apps.sl
 - **Raise the score ceiling**: change `MAX_SCORE`/`MAX_DAY` in `api/game-score/route.js` **and** the matching CHECKs in the DB (`scripts/fix-score-caps.sql`). Changing only one side silently loses runs
 - **Render-only game code**: everything inside the `frame()` loop in `Game.js` is outside the sim, so `Math.random`/`Math.sin` are fine there — but never let a render value feed back into sim state
 - **Havana skyline**: `buildHavana()` in `Game.js` generates the strip once (seeded); `drawBuilding()` renders landmarks (Capitolio, Hotel Nacional, FOCSA, Morro, Bacardí) and three filler styles (colonial/deco/modern) plus palms. Colors come from `facade()`: pastel × sun tint by day, sky silhouette by night, blended toward the horizon by the layer's `haze`. Tweak `FACADES` for the palette, the `layer(...)` calls for haze/brightness per plane
-- **Change polling frequency**: Modify `setInterval` in the respective component (page.js=4s, OfferFeed=3s `POLL_MS`, BackgroundLiveLine=30s)
+- **Change polling frequency**: `DEFAULT_POLL_S` in `lib/viewParams.js` for the home (4s, overridable per URL with `?poll=`); `setInterval` in the component for the rest (OfferFeed=3s `POLL_MS`, BackgroundLiveLine=30s)
 - **Change cron schedule**: Edit `crons` in `vercel.ts` (currently `*/10 * * * *`)
 - **Modify colors**: Edit `@theme` block in `globals.css` — custom Tailwind colors are defined there, not in a config file
 - **Edit SEO/metadata**: Update `metadata` export in `app/layout.js` (site-wide) or `app/play/page.js` / `app/play/top-scores/page.js` (game pages)
