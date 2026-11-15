@@ -152,53 +152,6 @@ main {
 		0 4px 18px rgba(0, 0, 0, 0.16);
 }
 
-.liquid-glass--emerald {
-	background: linear-gradient(135deg,
-			rgba(16, 185, 129, 0.65),
-			rgba(16, 185, 129, 0.35) 50%,
-			rgba(16, 185, 129, 0.5));
-	border-color: rgba(167, 243, 208, 0.55);
-	box-shadow:
-		inset 0 1px 0 rgba(255, 255, 255, 0.5),
-		inset 0 -1px 1px rgba(255, 255, 255, 0.1),
-		0 8px 28px rgba(16, 185, 129, 0.35);
-}
-
-.liquid-glass--red {
-	background: linear-gradient(135deg,
-			rgba(239, 68, 68, 0.65),
-			rgba(239, 68, 68, 0.35) 50%,
-			rgba(239, 68, 68, 0.5));
-	border-color: rgba(254, 202, 202, 0.55);
-	box-shadow:
-		inset 0 1px 0 rgba(255, 255, 255, 0.5),
-		inset 0 -1px 1px rgba(255, 255, 255, 0.1),
-		0 8px 28px rgba(239, 68, 68, 0.35);
-}
-
-/* Softer "attempt" variants — same tint, more see-through, dashed edge */
-.liquid-glass--emerald-soft {
-	background: linear-gradient(135deg,
-			rgba(16, 185, 129, 0.4),
-			rgba(16, 185, 129, 0.18) 50%,
-			rgba(16, 185, 129, 0.3));
-	border: 1px dashed rgba(167, 243, 208, 0.6);
-	box-shadow:
-		inset 0 1px 0 rgba(255, 255, 255, 0.35),
-		0 6px 20px rgba(0, 0, 0, 0.15);
-}
-
-.liquid-glass--red-soft {
-	background: linear-gradient(135deg,
-			rgba(239, 68, 68, 0.4),
-			rgba(239, 68, 68, 0.18) 50%,
-			rgba(239, 68, 68, 0.3));
-	border: 1px dashed rgba(254, 202, 202, 0.6);
-	box-shadow:
-		inset 0 1px 0 rgba(255, 255, 255, 0.35),
-		0 6px 20px rgba(0, 0, 0, 0.15);
-}
-
 /* True refraction (Chromium only): replace the plain blur with an SVG lens filter
    (feDisplacementMap) that bends the backdrop at the edges, like iOS Liquid Glass.
    `.glass-refract` is added to <html> via JS only where backdrop-filter:url() works,
@@ -261,24 +214,175 @@ main {
 	}
 }
 
-/* Floating offers animation */
-@keyframes float-up {
-	0% {
-		transform: translateX(-50%) translateY(0);
+/* Feed de ofertas en vivo (OfferFeed.js). Las filas tienen altura fija y se apilan con
+   translateY según su hueco (--slot, 0 = la más nueva): la pila solo se mueve con transform y
+   opacity, sin layout por frame. */
+.offer-feed {
+	--offer-step: 2.75rem;
+	/* Hueco más alto al que sube una fila. Donde solo se ven tres, la cuarta se funde en el
+	   sitio de la tercera en vez de subir un hueco más (en stream ahí está el chip de variación) */
+	--offer-top-slot: 4;
+	--offer-x: 0;
+	position: fixed;
+	z-index: 30;
+	left: 0.75rem;
+	bottom: calc(env(safe-area-inset-bottom) + 7rem);
+	pointer-events: none;
+}
+
+@media (min-width: 640px) {
+	.offer-feed {
+		left: 2rem;
+		bottom: 5rem;
+	}
+}
+
+/* Modo stream (?stream=true): abajo a la izquierda Telegram pinta los comentarios del Live Story,
+   así que el feed sube por encima del 25 % inferior. Es la única regla que hay que tocar para
+   afinar la posición viendo el directo. El margen es estrecho: a 540x960 y sin pie, el chip de
+   variación acaba en y=586 y las tres líneas ocupan 126 px, así que `bottom` solo cabe entre
+   25vh y 25.8vh. Para subirlo más hay que dejar dos líneas (--offer-top-slot: 1). */
+.offer-feed[data-stream="true"] {
+	bottom: 25.5vh;
+	--offer-top-slot: 2;
+}
+
+.offer-row {
+	position: absolute;
+	left: 0;
+	bottom: 0;
+	display: flex;
+	width: max-content;
+	max-width: calc(100vw - 1.5rem);
+	transform: translate(var(--offer-x), calc(min(var(--slot), var(--offer-top-slot)) * -1 * var(--offer-step)));
+	transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (min-width: 640px) {
+	.offer-row {
+		max-width: min(24rem, calc(100vw - 4rem));
+	}
+}
+
+/* La opacidad va en la píldora y no en la fila: un ancestro con opacidad dejaría al
+   backdrop-filter del vidrio sin fondo que desenfocar. 0.35s = EXIT_MS en OfferFeed.js */
+.offer-pill {
+	position: relative;
+	overflow: hidden;
+	transition: opacity 0.35s ease;
+	animation: offer-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+
+@keyframes offer-in {
+	from {
 		opacity: 0;
+		transform: translateY(var(--offer-step)) scale(0.92);
 	}
-	5% {
-		opacity: 1;
+}
+
+.offer-row[data-rank="1"] .offer-pill {
+	opacity: 0.85;
+}
+
+.offer-row[data-rank="2"] .offer-pill {
+	opacity: 0.6;
+}
+
+.offer-row[data-rank="3"] .offer-pill {
+	opacity: 0.35;
+}
+
+/* En móvil solo se ven tres, y centradas. En modo stream no se centran: se quedan a la izquierda,
+   que es la posición medida contra el chip de variación y los comentarios del directo */
+@media (max-width: 639px) {
+	.offer-feed {
+		--offer-top-slot: 2;
 	}
-	90% {
-		opacity: 1;
+
+	.offer-feed:not([data-stream="true"]) {
+		left: 50%;
+		--offer-x: -50%;
 	}
-	100% {
-		transform: translateX(-50%) translateY(-100vh);
+
+	.offer-row[data-rank="2"] .offer-pill {
+		opacity: 0.5;
+	}
+
+	.offer-row[data-rank="3"] .offer-pill {
+		opacity: 0;
+		pointer-events: none;
+	}
+}
+
+/* En modo stream también, a cualquier ancho: la cuarta se metería en el chip de variación */
+.offer-feed[data-stream="true"] .offer-row[data-rank="2"] .offer-pill {
+	opacity: 0.5;
+}
+
+.offer-feed[data-stream="true"] .offer-row[data-rank="3"] .offer-pill {
+	opacity: 0;
+}
+
+.offer-row[data-leaving] .offer-pill {
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* Brillo de una pasada para las operaciones cerradas (solo con fx=full) */
+.offer-pill--shine::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.35) 50%, transparent 65%);
+	pointer-events: none;
+	animation: offer-shine 0.9s ease-out 0.25s both;
+}
+
+@keyframes offer-shine {
+	from {
+		transform: translateX(-120%);
+	}
+
+	to {
+		transform: translateX(120%);
+	}
+}
+
+/* fx=low (implícito en ?stream=true): fondo sólido en vez de vidrio, porque el backdrop-filter
+   es lo más caro de la página, y entrada sin rebote */
+.offer-pill--flat {
+	background: rgba(0, 0, 0, 0.45);
+	border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.offer-feed[data-fx="low"] .offer-pill {
+	animation: offer-in-low 0.35s ease-out backwards;
+}
+
+/* Entra desde muy cerca: una línea entera por debajo se metería en la zona de comentarios */
+@keyframes offer-in-low {
+	from {
+		opacity: 0;
+		transform: translateY(0.75rem);
+	}
+}
+
+@keyframes offer-fade {
+	from {
 		opacity: 0;
 	}
 }
 
-.animate-float-up {
-	animation: float-up linear forwards;
+@media (prefers-reduced-motion: reduce) {
+	.offer-row {
+		transition: none;
+	}
+
+	.offer-feed .offer-pill {
+		animation: offer-fade 0.3s ease backwards;
+	}
+
+	.offer-pill--shine::after {
+		display: none;
+	}
 }
