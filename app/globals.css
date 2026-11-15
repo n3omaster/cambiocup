@@ -246,10 +246,20 @@ main {
 	pointer-events: none;
 }
 
+/* En escritorio el pie tiene dos líneas a la izquierda (el copyright y el interruptor del aviso
+   diario), justo debajo del feed: el piso queda por encima del padding de <main> más esas dos
+   líneas (2rem + 2.5rem desde 640px, 3rem + 3rem desde 768px), con un respiro */
 @media (min-width: 640px) {
 	.offer-feed {
 		left: 2rem;
-		bottom: 5rem;
+		bottom: 6rem;
+	}
+}
+
+@media (min-width: 768px) {
+	.offer-feed {
+		left: 3rem;
+		bottom: 7.5rem;
 	}
 }
 
