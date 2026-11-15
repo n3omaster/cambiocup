@@ -25,7 +25,7 @@ There are no tests in this project.
 1. **Ingest**: `/api/cron` → Fetches rates from QvaPay API (6 coins in parallel) → Calculates `(avg_buy + avg_sell) / 2` → Saves to Supabase `exchange` table (plus fixed GAS price). Coins with no market data that tick (QvaPay answers a bare `0` when a coin has no valid completed trade in its last 7 days — low-volume CUPCASH can hit this) are skipped, not saved, and so is a coin with one side at `0`, since averaging it stores half the rate. Triggered every 10 minutes by a Vercel cron defined in `vercel.ts`
 2. **Serve**: `/api` → Returns last 6 entries per coin from database, plus `dayAgo` (each coin's value 24 h ago, `getDayAgoValues()`, computed once per 10-min tick because `/api` is polled every 4s per visitor)
 3. **Display**: Frontend polls `/api` every 4s → `randomize()` adds micro-fluctuation to the **number only** → `dayTrend()` sets color and chip from the real latest value vs `dayAgo`
-4. **Offers**: `/api/webhook` receives buy/sell offers → `/api/offers` serves recent ones → `FloatingOffers` renders animated bubbles. The same feed also drives live difficulty events in the game
+4. **Offers**: `/api/webhook` receives buy/sell offers → `/api/offers` serves recent ones → `OfferFeed` stacks them bottom-left like live comments (see *Offer feed* below). The same feed also drives live difficulty events in the game
 5. **Charts**: `/api/history` returns N-day data → `BackgroundLiveLine` renders a full-screen `liveline` chart behind the main content, fed the live randomized value between history refreshes
 6. **Live game dynamics**: every offer that reaches `/api/webhook` becomes an in-game event during a CUP Runner run, and **the coin decides which one** (see Live dynamics below)
 7. **Daily push**: `/api/push/daily` (Vercel cron) sends the rates at 9:00 Havana to every browser in `push_subscriptions` (see Daily push below)
@@ -36,7 +36,7 @@ There are no tests in this project.
 app/
 ├── page.js                    # Main client component (COIN_CONFIG map, coin selector, price display, color logic, Liquid Glass lens filter)
 ├── layout.js                  # Root layout (Barlow font, SEO metadata, OG image)
-├── globals.css                # Tailwind theme (@theme), custom colors, float-up animation, .liquid-glass utilities
+├── globals.css                # Tailwind theme (@theme), custom colors, offer feed styles (.offer-*), .liquid-glass utilities
 ├── loading.js                 # Loading state
 ├── not-found.js               # 404 page
 ├── privacy/page.js            # Privacy policy page
@@ -45,7 +45,7 @@ app/
 │   ├── Game.js                # "CUP Runner" canvas game (client): rendering, audio, input, trace recording, score submission
 │   └── top-scores/page.js     # Full leaderboard page (server component, best score per player, top 50, revalidate 30s)
 ├── components/
-│   ├── FloatingOffers.js      # Animated buy/sell offer bubbles (polls /api/offers every 3s)
+│   ├── OfferFeed.js           # Live offer feed stacked bottom-left, like live comments (polls /api/offers every 3s)
 │   ├── DailyPush.js           # Footer toggle + 3 s prompt for the daily push
 │   ├── BackgroundLiveLine.js  # Full-screen Liveline chart background (polls /api/history every 30s, 15 days)
 │   ├── VerifiedBadge.js       # "Verificado con QvaPay" badge for leaderboard rows
@@ -73,6 +73,7 @@ app/
     └── qvapay-session/route.js # GET → {enabled} / POST {init_data} → verified QvaPay session (mini-app)
 lib/
 ├── supabase.js                # Supabase client + all DB operations
+├── viewParams.js              # parseViewParams(): pure parser of the home's URL params (stream, offers, fx, nocode...). Tests in viewParams.test.mjs (`node --test lib/viewParams.test.mjs`)
 ├── gameDay.js                 # Daily map freeze: Havana-midnight cutoff + `mapDay` id (handles Cuba's DST, where local midnight doesn't exist one night a year)
 ├── gameToken.js               # Server-only HMAC run tokens for the game (issue/verify) + deriveSecret(label)
 ├── gameHistory.js             # getBucketedHistory(coinId, asOf): parallel pagination past the 1000-row cap, buckets to ~2000 points
@@ -124,6 +125,18 @@ vercel.ts                      # Vercel config (@vercel/config): crons for /api/
 - **Known bad data**: between 2023-12 and 2025-12, 444 rows hold half the real rate (CLASICA 393, MLC 38, CUP 13) and 6 more have a null `value`, all from before `/api/cron` rejected a side at `0`. There are no rows at exactly `0`. The two `scripts/clean-bad-rates-*.sql` scripts list them row by row and copy them to `exchange_removed`. Six other outliers aren't halves and were left in on purpose (CUP in 2023-12, MLC on 2025-12-30).
 - **Sampling density**: CUP has ~48 rows/day until 2025-11 and ~144 since 2025-12, plus 44 days without rows (the largest gap is 2026-05-01 to 2026-05-22).
 - **`value` is not a trade price**: it's `(average_buy + average_sell) / 2` over QvaPay's rolling window (`window_hours: 48` for both CUP and CUPCASH on 2026-11-05). The public `note` field says so, so keep it. `count` and `window_hours` aren't stored.
+
+### Offer feed (home)
+
+`OfferFeed` replaced the old floating bubbles. It sits bottom-left on desktop and bottom-center on mobile. New offers enter at the bottom, push the older ones up and those fade out (4 visible, 3 on mobile and in stream mode, 6 s each).
+
+- **Only `transform` and `opacity` move**: rows have a fixed height and sit at `translateY(--slot × --offer-step)`. Don't animate height or `grid-template-rows` here, the page is also streamed from a server where GPU time is the budget.
+- **Opacity lives on the pill, not on the row**: an ancestor with opacity < 1 becomes the backdrop root and the glass would blur nothing.
+- **Drip queue**: a poll's offers are published one by one (450 ms, 250 ms when more than 6 wait, oldest dropped past 12). The first load only publishes the 3 newest instead of replaying the last 2 minutes.
+- **Delta chip** compares the offer with that coin's real latest rate (`rates` from `page.js`, never the `randomize()` number) and hides at ≥ 50 %, which is bad data rather than a signal.
+- **Tapping a line switches the coin selector** (`pickCoin` in `page.js`).
+- **View params** (`lib/viewParams.js`): `offers=false` doesn't mount it, so no polling. `fx=low` drops the glass for a solid background, the shine and the bounce. `stream=true` implies `fx=low`, keeps offers on, makes lines non-interactive and moves the feed above the bottom 25 %, where Telegram draws its Live Story comments. That position is the single `.offer-feed[data-stream="true"]` rule in `globals.css`; its comment has the measured margins.
+- **Testing**: never POST fake offers to `/api/webhook`, they land in production `offers` and fire real events in running games. Override `window.fetch` for `/api/offers` in the tab instead.
 
 ### The daily frozen map (and why it matters)
 
@@ -222,7 +235,7 @@ Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders ne
 | Home page (`page.js`) | `/api` | 4 seconds |
 | Game presence heartbeat | `/api/presence` (POST) | 20 seconds (while running) |
 | Presence counter | `/api/presence` (GET) | 15 seconds |
-| FloatingOffers | `/api/offers` | 3 seconds |
+| OfferFeed | `/api/offers` | 3 seconds (not mounted with `?offers=false`) |
 | BackgroundLiveLine | `/api/history` | 30 seconds |
 | Game (during a run) | `/api/offers` | 3 seconds (live difficulty events) |
 
@@ -234,10 +247,10 @@ Supabase queries have an implicit 1000-row cap — `getHistoricalData` orders ne
 - **Per-coin config**: `COIN_CONFIG` in `page.js` maps each coin to `{historyKey, decimals, deep}` — decimals: CUP/CASH/ETECSA/TROPICAL/GAS = 2, MLC/CLASICA = 3; randomize span (`deep`): CUP/CASH/ETECSA/TROPICAL/GAS = 0.5, MLC = 0.009, CLASICA = 0.005. GAS is stored as a fixed 3.50 but gets the same `deep` jitter as the rest so it reads like live data; it also sets `unit: 'USD por litro'` (rendered as a chip under the price)
 - **Color logic**: `dayTrend()` in `helpers.js` compares the real latest value against the value 24 h ago: lower → green (bg-malachite), higher → red (bg-crimson), within ±`STABLE_PCT` (0.3%) → blue (bg-delft_blue), also when there is no reference. Same logic in `/api/og`. Never feed it the `randomize()` number: that noise (±0.25%) was up to 20× the real move, which made the color flip at random every 4s on most coins. 24 h beats yesterday's close because right after midnight the close compares a value against itself (CUP: 0.2 vs 5.2 color changes a day). 0.3% was the threshold with the fewest color changes over a 6-day sample, worth re-checking with more history. Transition is 0.5s ease on `<main>`
 - **Tailwind v4 theme**: Custom colors defined in `globals.css` under `@theme` block (not tailwind.config.js). `--color-*: initial` wipes Tailwind's default palette, so any default token the app uses must be re-declared there
-- **Liquid Glass UI**: `.liquid-glass` (+ `--dark/--emerald/--red` variants) in `globals.css`, driven by an SVG displacement-map `backdrop-filter` defined in `page.js` (`GlassLensFilter`); edges sample inward to avoid Chrome edge-clamp streaks
+- **Liquid Glass UI**: `.liquid-glass` (+ `--dark` variant) in `globals.css`, driven by an SVG displacement-map `backdrop-filter` defined in `page.js` (`GlassLensFilter`); edges sample inward to avoid Chrome edge-clamp streaks
 - **Font**: Barlow (weights: 500, 800, 900) loaded via `next/font/google`
 - **Number animation**: `@number-flow/react` with 500ms duration, ease-out easing
-- **URL params**: `?nocode=true` hides the iframe embed button and `?nogame=true` hides the "Jugar" button, independently (used when the page is embedded). There is no automatic iframe detection. QvaPay's mini-app `entry_url` carries only `nocode`, so the game stays available there; the snippet from the embed modal carries neither
+- **URL params**: parsed by `parseViewParams()` in `lib/viewParams.js`. `?nocode=true` hides the iframe embed button and `?nogame=true` hides the "Jugar" button, independently (used when the page is embedded). `page.js` also honors `offers`, `fx` and `stream` for the offer feed; the parser's other fields (`footer`, `theme`, `rotate`, `poll`, `currency`, `chart`, `push`) aren't wired yet. There is no automatic iframe detection. QvaPay's mini-app `entry_url` carries only `nocode`, so the game stays available there; the snippet from the embed modal carries neither
 - **OG images**: Dynamic generation with `next/og` ImageResponse — `/api/og` is `force-dynamic` + no-cache; `/api/og/play` is edge-cached 1h
 
 ## External APIs
@@ -278,7 +291,7 @@ cambiocup is also a **mini-app inside the QvaPay mobile app** (row `mini_apps.sl
 - **Raise the score ceiling**: change `MAX_SCORE`/`MAX_DAY` in `api/game-score/route.js` **and** the matching CHECKs in the DB (`scripts/fix-score-caps.sql`). Changing only one side silently loses runs
 - **Render-only game code**: everything inside the `frame()` loop in `Game.js` is outside the sim, so `Math.random`/`Math.sin` are fine there — but never let a render value feed back into sim state
 - **Havana skyline**: `buildHavana()` in `Game.js` generates the strip once (seeded); `drawBuilding()` renders landmarks (Capitolio, Hotel Nacional, FOCSA, Morro, Bacardí) and three filler styles (colonial/deco/modern) plus palms. Colors come from `facade()`: pastel × sun tint by day, sky silhouette by night, blended toward the horizon by the layer's `haze`. Tweak `FACADES` for the palette, the `layer(...)` calls for haze/brightness per plane
-- **Change polling frequency**: Modify `setInterval` in the respective component (page.js=4s, FloatingOffers=3s, BackgroundLiveLine=30s)
+- **Change polling frequency**: Modify `setInterval` in the respective component (page.js=4s, OfferFeed=3s `POLL_MS`, BackgroundLiveLine=30s)
 - **Change cron schedule**: Edit `crons` in `vercel.ts` (currently `*/10 * * * *`)
 - **Modify colors**: Edit `@theme` block in `globals.css` — custom Tailwind colors are defined there, not in a config file
 - **Edit SEO/metadata**: Update `metadata` export in `app/layout.js` (site-wide) or `app/play/page.js` / `app/play/top-scores/page.js` (game pages)

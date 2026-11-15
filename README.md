@@ -45,7 +45,7 @@
 - **📈 Tiempo real** — la interfaz se refresca cada 4 segundos con micro-fluctuaciones que reflejan el pulso del mercado
 - **🟢🔴 Semáforo de tendencia** — verde cuando la tasa está por debajo del promedio reciente, rojo cuando está por encima
 - **📊 Gráfica viva de fondo** — 15 días de historia renderizados a pantalla completa detrás del precio
-- **💬 Ofertas flotantes** — las compras y ventas reales aparecen como burbujas animadas según ocurren
+- **💬 Ofertas en vivo** — las compras y ventas reales se apilan abajo según ocurren, como comentarios en directo
 - **🔔 Aviso diario** — una notificación push cada mañana con las tasas, con sistema propio
 - **🪟 Widget embebible** — un iframe para llevar la tasa a cualquier web
 - **🧊 Liquid Glass UI** — lente de vidrio con mapa de desplazamiento SVG, al estilo iOS
@@ -75,7 +75,7 @@ flowchart LR
     CRON --> DB[("🗄️ Supabase")]
     WH["/api/webhook<br/>ofertas"] --> DB
     DB --> API["/api"] -->|"poll 4s"| UI["💻 Frontend<br/>Next.js + React"]
-    DB --> OF["/api/offers"] -->|"poll 3s"| FO["💬 Burbujas<br/>de ofertas"]
+    DB --> OF["/api/offers"] -->|"poll 3s"| FO["💬 Feed de ofertas<br/>en vivo"]
     DB --> H["/api/history"] -->|"poll 30s"| BG["📊 Gráfica<br/>Liveline"]
     DB --> GH["/api/game-history"] --> GAME["🎮 CUP Runner"]
     GAME -->|"traza del run"| GS["/api/game-score<br/>re-simulación 🛡️"] --> DB

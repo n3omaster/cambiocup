@@ -7,11 +7,12 @@ import { Suspense, useState, useEffect, useCallback, useMemo } from 'react'
 
 // Components
 import DailyPush from './components/DailyPush'
-import FloatingOffers from './components/FloatingOffers'
 import BackgroundLiveLine from './components/BackgroundLiveLine'
+import OfferFeed from './components/OfferFeed'
 
 // Utils
 import { randomize, dayTrend, getTimeAgo } from './utils/helpers'
+import { parseViewParams } from '@/lib/viewParams'
 import { signalReady, haptic, useQvaPayBar, shareInQvaPay } from './utils/qvapay'
 
 // Config
@@ -26,6 +27,7 @@ const COIN_CONFIG = {
 }
 
 const COINS = Object.keys(COIN_CONFIG)
+const NO_RATES = {}
 
 // Verde = más barato que hace 24 h, rojo = más caro, azul = estable (dayTrend en helpers.js)
 const TREND_COLORS = { down: 'bg-malachite', up: 'bg-crimson', stable: 'bg-delft_blue' }
@@ -66,14 +68,16 @@ function GlassLensFilter() {
 function HomeContent() {
 
 	const searchParams = useSearchParams()
-	const noCode = searchParams.get('nocode') === 'true'
-	const noGame = searchParams.get('nogame') === 'true'
+	const view = useMemo(() => parseViewParams(searchParams, { coins: COINS }), [searchParams])
+	const noCode = !view.code
+	const noGame = !view.game
 
 	const [coin, setCoin] = useState('CUP')
 	const [value, setValue] = useState(0)
 	const [trend, setTrend] = useState(null) // { pct, state } frente a hace 24 h
 	const [noData, setNoData] = useState(false)
 	const [staleAgo, setStaleAgo] = useState(null)
+	const [rates, setRates] = useState(NO_RATES) // tasa real por moneda, para el feed de ofertas
 	const [showModal, setShowModal] = useState(false)
 	const [copied, setCopied] = useState(false)
 
@@ -100,6 +104,14 @@ function HomeContent() {
 
 				const response = await fetch('/api')
 				const data = await response.json()
+
+				// Solo cambia cada 10 min: se conserva el mismo objeto para no repintar el feed cada 4 s
+				const next = {}
+				for (const name of COINS) {
+					const real = data[COIN_CONFIG[name].historyKey]?.[0]?.value
+					if (real) next[name] = real
+				}
+				setRates((prev) => (COINS.every((name) => prev[name] === next[name]) ? prev : next))
 
 				const history = data[config.historyKey]
 				if (!history?.length) {
@@ -136,6 +148,15 @@ function HomeContent() {
 		return () => window.removeEventListener('keydown', handleEscape)
 	}, [showModal])
 
+	// Cambia de moneda desde el selector o tocando una oferta del feed
+	const pickCoin = useCallback((name) => {
+		if (!COIN_CONFIG[name]) return
+		if (name !== coin) haptic('light')
+		setCoin(name)
+		setNoData(false) // clear the previous coin's "sin datos" chip until the new fetch resolves
+		document.querySelector(`[data-coin="${name}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+	}, [coin])
+
 	const iframeCode = `<iframe src="${typeof window !== 'undefined' ? window.location.origin : 'https://www.cambiocup.com'}" width="100%" height="600" frameborder="0" allowfullscreen style="border-radius: 5px;"></iframe>`
 
 	const copyToClipboard = useCallback(async () => {
@@ -162,7 +183,8 @@ function HomeContent() {
 	return (
 		<>
 			<GlassLensFilter />
-			<FloatingOffers />
+			{/* En modo stream no hay nadie que toque una oferta, y la moneda la lleva la rotación */}
+			{view.offers && <OfferFeed rates={rates} fx={view.fx} stream={view.stream} onPickCoin={view.stream ? undefined : pickCoin} />}
 			<main className={bgColor + " flex min-h-screen flex-col justify-between p-4 sm:p-8 md:p-12 relative z-20 overflow-hidden"}>
 				<BackgroundLiveLine coin={coin} value={value} opacity={0.3} />
 
@@ -224,12 +246,8 @@ function HomeContent() {
 								<button
 									key={name}
 									type="button"
-									onClick={(e) => {
-										if (name !== coin) haptic('light')
-										setCoin(name)
-										setNoData(false) // clear the previous coin's "sin datos" chip until the new fetch resolves
-										e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
-									}}
+									data-coin={name}
+									onClick={() => pickCoin(name)}
 									aria-pressed={coin === name}
 									className={`${coin === name
 										? "bg-white text-black shadow-md"
